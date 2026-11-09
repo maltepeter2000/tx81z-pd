@@ -48,11 +48,11 @@
 #X msg 400 630 connect localhost 9000;
 #X text 400 660 change host / port here;
 #X floatatom 40 730 3 0 0 0 - - - 0;
-#X text 40 780 PROGRAM CHANGE: Bank I/A/B/C + Patch 1-32 (I01-C32 = 0-127 \, Bank D ist per Program Change nicht erreichbar);
-#X text 40 810 Bank;
+#X text 40 780 PROGRAM CHANGE: bank I/A/B/C + patch 1-32 (I01-C32 = 0-127 \, bank D cannot be reached via program change);
+#X text 40 810 bank;
 #X obj 90 810 hradio 18 1 0 4 empty empty empty 0 -8 0 10 #fcfcfc #000000 #000000 0;
 #X text 90 830 I  A  B  C;
-#X text 200 810 Patch;
+#X text 200 810 patch;
 #X floatatom 250 810 4 1 32 0 - - - 0;
 #X obj 250 840 clip 1 32;
 #X obj 250 865 - 1;
@@ -63,8 +63,8 @@
 #X obj 250 950 +;
 #X msg 250 980 pgm \$1;
 #X floatatom 250 1010 4 0 0 0 - - - 0;
-#X text 300 1010 <- gesendete Nummer;
-#X text 420 810 direkt 0-127:;
+#X text 300 1010 <- number sent;
+#X text 420 810 direct 0-127:;
 #X floatatom 520 810 4 0 127 0 - - - 0;
 #X obj 520 840 clip 0 127;
 #X msg 520 865 pgm \$1;
