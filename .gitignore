@@ -1,0 +1,17 @@
+# build output
+build/
+*.o
+*.pd_linux
+*.pd_darwin
+*.pd_linux_arm
+# firmware and battery RAM are user supplied (Yamaha firmware is copyrighted)
+*.bin
+*.rom
+*.ic15
+*.nvram
+*.nvram.bak
+*.nvram.msg
+# test output
+*.wav
+*.csv
+.DS_Store
