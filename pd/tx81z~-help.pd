@@ -74,6 +74,8 @@
 #X text 490 940 A01 GrandPiano;
 #X msg 560 280 factoryinit;
 #X text 660 280 presets + MIDI setup (~16 s);
+#X msg 560 305 pcswitch 1;
+#X text 660 305 program changes on (0 = off \, 2 = ind);
 #X connect 5 0 2 0;
 #X connect 7 0 2 0;
 #X connect 8 0 2 0;
@@ -133,3 +135,4 @@
 #X connect 69 0 2 0;
 #X connect 71 0 2 0;
 #X connect 73 0 2 0;
+#X connect 75 0 2 0;

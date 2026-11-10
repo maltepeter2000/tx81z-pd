@@ -33,7 +33,8 @@ Then open the project `tx81z-pd` in the IDE and click **Run**.
 - Audio on outputs 1/2.
 - LCD → O2O / OLED: `/display-strings-and-numbers <line 1> \n <line 2>` to
   127.0.0.1:7562.
-- After booting the patch presses PLAY, so the TX81Z never stays in a menu.
+- After booting the patch presses PLAY, so the TX81Z never stays in a menu,
+  and sends `pcswitch 1` so program changes (MIDI or OSC) are accepted.
 - No `tx81z.nvram` yet? `tx81z~` runs the factory init by itself (presets,
   MIDI setup, ~16 s) and saves the file.
 - The battery RAM is saved when the project stops (Bela closes the patch). Only
