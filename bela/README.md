@@ -1,60 +1,59 @@
-# TX81Z auf Bela (C++-Projekt)
+# TX81Z on Bela (C++ project)
 
-Der Ordner `tx81z/` ist ein fertiges Bela-Projekt. Alle Dateien liegen flach in
-einem Ordner (keine Unterordner), und es baut mit Belas Standard-Einstellungen –
-keine Make-Parameter nötig.
+The folder `tx81z/` is a ready-to-use Bela project. All files are in one flat
+folder (no subfolders), and it builds with Bela's default settings – no make
+parameters needed.
 
-## Installation (Bela per USB, 192.168.7.2)
+## Installation (Bela via USB, 192.168.7.2)
 
-Vom Mac aus, im Ordner `bela`:
+From the Mac, inside the folder `bela`:
 
 ```
 scp -r tx81z root@192.168.7.2:~/Bela/projects/
-scp PFAD/ZUM/tx81z-v1.6.bin root@192.168.7.2:~/Bela/projects/tx81z/tx81z-v1.6.bin
-scp PFAD/ZUM/tx81z.nvram    root@192.168.7.2:~/Bela/projects/tx81z/      # optional
+scp PATH/TO/tx81z-v1.6.bin root@192.168.7.2:~/Bela/projects/tx81z/tx81z-v1.6.bin
+scp PATH/TO/tx81z.nvram    root@192.168.7.2:~/Bela/projects/tx81z/      # optional
 ```
 
-Die ROM-Datei muss auf dem Bela genau `tx81z-v1.6.bin` heißen (Kleinschreibung).
+On the Bela the ROM file must be named exactly `tx81z-v1.6.bin` (lower case).
 
-## Starten
+## Running
 
-**Im IDE:** Projekt `tx81z` öffnen → Build & Run. Der erste Build dauert einige Minuten.
-Falls du vorher schon `CPPFLAGS=-std=c++14` eingetragen hast, kannst du es stehen lassen.
+**In the IDE:** open the project `tx81z` → Build & Run. The first build takes a few minutes.
 
-**Oder per SSH:**
+**Or via SSH:**
 ```
 ssh root@192.168.7.2
 make -C ~/Bela PROJECT=tx81z run
 ```
 
-## Was passiert
+## What happens
 
-- Ohne `tx81z.nvram` läuft zuerst die Werks-Initialisierung (Testmodus,
-  Presets → RAM), danach startet der emulierte TX81Z neu (~7 s).
-- Nach dem Boot wählt **Auto-Play** C15 „LatelyBass“ (Program Change 110) und
-  spielt einen 4-Takt-Loop Gm – Bb – Dm – F im Galopp-Rhythmus (lang-kurz-kurz).
-  Sobald MIDI von einem Keyboard ankommt, stoppt es; die Voice bleibt gewählt.
-- Das LCD geht per OSC an O2O (`/display-strings-and-numbers`, 127.0.0.1:7562),
-  also aufs OLED.
-- Das Batterie-RAM wird beim Stoppen gespeichert (`tx81z.nvram` im Projekt).
+- Without `tx81z.nvram` the factory init runs first (test mode, presets → RAM),
+  then the emulated TX81Z restarts (~7 s).
+- After booting, **auto play** selects C15 "LatelyBass" (program change 110) and
+  plays a 4-bar loop Gm – Bb – Dm – F in a gallop rhythm (long-short-short).
+  As soon as MIDI arrives from a keyboard it stops; the voice stays selected.
+- The LCD is sent via OSC to O2O (`/display-strings-and-numbers`, 127.0.0.1:7562),
+  i.e. to the OLED.
+- The battery RAM is saved when the project is stopped (`tx81z.nvram` in the project).
 
-## OSC-Steuerung (UDP-Port 7563)
+## OSC control (UDP port 7563)
 
-| Adresse | Argumente |
+| Address | Arguments |
 |---|---|
-| `/tx81z/press` | Taste (s) |
-| `/tx81z/button` | Taste (s), 0/1 (i) |
+| `/tx81z/press` | button (s) |
+| `/tx81z/button` | button (s), 0/1 (i) |
 | `/tx81z/autoplay` | 0/1 (i) |
 | `/tx81z/save` | – |
 
-Tasten: `store utility edit play param- param+ dec inc vol- vol+ cursor`
+Buttons: `store utility edit play param- param+ dec inc vol- vol+ cursor`
 
-## Einstellungen
+## Settings
 
-Oben in `render.cpp`: ROM-/NVRAM-Dateiname, MIDI-Ports (`hw:1,0,0`, `hw:1,0,1`,
-`hw:2,0,0`), OLED-Host/Port, Gain, Auto-Play an/aus, und für den Loop:
-`kAutoProgram` (Voice), `kAutoBpm` (Tempo), `kGallop` (true = Galopp,
-false = durchgehende Achtel), `kAutoRoots` (Grundtöne der 4 Takte).
+At the top of `render.cpp`: ROM / nvram file names, MIDI ports (`hw:1,0,0`,
+`hw:1,0,1`, `hw:2,0,0`), OLED host/port, gain, auto play on/off, and for the loop:
+`kAutoProgram` (voice), `kAutoBpm` (tempo), `kGallop` (true = gallop,
+false = straight eighths), `kAutoRoots` (root notes of the 4 bars).
 
-Nach Änderungen an `src/` im Hauptprojekt: `./update_project.sh` (kopiert flach
-und passt die ymfm-Kopie an C++11 an).
+After changes to `src/` in the main project: `./update_project.sh` (copies the
+files flat and adapts the ymfm copy to C++11).
