@@ -71,6 +71,9 @@
 #X obj 860 630 list;
 #X msg 860 655 pgm \$1;
 #X text 900 500 OSC remote (UDP 7563): /tx81z/press <button> \, /tx81z/button <button> <0|1> \, /tx81z/pgm <0-127>;
+#X obj 700 475 delay 500;
+#X msg 790 475 pcswitch 1;
+#X text 880 475 program change switch = com (else program changes are ignored);
 #X connect 4 0 8 0;
 #X connect 4 1 8 1;
 #X connect 4 2 5 0;
@@ -144,3 +147,6 @@
 #X connect 64 2 69 0;
 #X connect 69 0 70 0;
 #X connect 70 0 2 0;
+#X connect 72 0 73 0;
+#X connect 73 0 2 0;
+#X connect 57 0 72 0;

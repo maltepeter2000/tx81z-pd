@@ -18,6 +18,9 @@
 //   press <button>        press and release a front-panel button
 //   button <button> <0|1> hold / release a button
 //   gain <f>              output gain (default 1)
+//   pcswitch <0|1|2>      program change switch off / com / ind (must not be
+//                         off, or program changes are ignored)
+//   sysparam <p> <d>      any system setup parameter (SYS byte p, value d)
 //   factoryinit           load the presets / reset the MIDI setup (test mode
 //                         init, ~16 s); runs automatically if the nvram file
 //                         given as argument does not exist yet
@@ -292,6 +295,27 @@ static void tx81z_press(t_tx81z *x, t_symbol *s)
 
 static void tx81z_gain(t_tx81z *x, t_floatarg f) { x->gain = f; }
 
+// System parameter change (service manual p.15/26): F0 43 1n 10 7B pp dd F7
+//   pp = SYS byte: 0 master tune, 1 basic receive ch (16 = omni), 2 transmit ch,
+//   3 program change switch (0 off, 1 com, 2 ind), 4 control change switch,
+//   5 pitch bend switch, 6 note switch, 7 SysEx on/off, 8 memory protect,
+//   9 combine, 10 aftertouch -> breath
+static void tx81z_sysparam(t_tx81z *x, t_floatarg p, t_floatarg d)
+{
+	if (x->init_stage) return;   // factory init in progress (it sets the switch itself)
+	int pp = int(p), dd = int(d);
+	if (pp < 0 || pp > 26 || dd < 0 || dd > 127) { pd_error(x, "tx81z~: sysparam <0-26> <0-127>"); return; }
+	x->synth->midi_in({ 0xF0, 0x43, 0x10, 0x10, 0x7B, uint8_t(pp), uint8_t(dd), 0xF7 });
+}
+
+// program change switch: 0 off, 1 com, 2 ind
+static void tx81z_pcswitch(t_tx81z *x, t_floatarg f)
+{
+	int v = int(f);
+	if (v < 0 || v > 2) { pd_error(x, "tx81z~: pcswitch 0 (off) / 1 (com) / 2 (ind)"); return; }
+	tx81z_sysparam(x, 3, v);
+}
+
 // Factory init (service manual p.28): hold MASTER VOLUME + CURSOR at power-on
 // -> "Test Entry ?", INC loads the presets and sets the MIDI parameters,
 // then power-cycle and select PLAY mode.
@@ -327,9 +351,15 @@ static void tx81z_init_tick(t_tx81z *x)
 		break;
 	case 6:
 		x->synth->set_button(TX81Z::BTN_PLAY, false);
+		// program change switch -> "com", otherwise program changes are ignored
+		x->synth->midi_in({ 0xF0, 0x43, 0x10, 0x10, 0x7B, 0x03, 0x01, 0xF7 });
+		x->init_stage = 7;
+		clock_delay(x->init_clock, 500);
+		break;
+	case 7:
 		x->init_stage = 0;
 		if (!x->nvram_path->empty()) x->synth->save_nvram(*x->nvram_path);
-		post("tx81z~: factory init done (presets loaded, battery RAM saved)");
+		post("tx81z~: factory init done (presets loaded, program change on, battery RAM saved)");
 		break;
 	default:
 		x->init_stage = 0;
@@ -437,5 +467,7 @@ void tx81z_tilde_setup(void)
 	class_addmethod(tx81z_class, (t_method)tx81z_button, gensym("button"), A_SYMBOL, A_FLOAT, A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_gain, gensym("gain"), A_FLOAT, A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_factoryinit, gensym("factoryinit"), A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_sysparam, gensym("sysparam"), A_FLOAT, A_FLOAT, A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_pcswitch, gensym("pcswitch"), A_FLOAT, A_NULL);
 }
 }

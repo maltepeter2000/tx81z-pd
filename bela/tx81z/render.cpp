@@ -168,6 +168,8 @@ static void autoPlayTick()
 	// first: select the voice, give the firmware half a second to load it
 	if (!gAutoProgramSent)
 	{
+		// program change switch -> "com" (SYS byte 3), otherwise the PC is ignored
+		gSynth->midi_in({ 0xF0, 0x43, 0x10, 0x10, 0x7B, 0x03, 0x01, 0xF7 });
 		gSynth->midi_in({ 0xC0, uint8_t(kAutoProgram) });
 		gAutoProgramSent = true;
 		gAutoStep = 0;

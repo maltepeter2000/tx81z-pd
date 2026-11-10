@@ -64,13 +64,17 @@ the same folder as the patch; the battery RAM file (`tx81z.nvram`) is created th
 - Arguments: `[tx81z~ <rom> <nvram>]`, paths relative to the patch
 - Inlet: raw MIDI bytes (straight from `[midiin]`), `note`, `cc`, `pgm`, `bend`,
   `press <button>`, `button <button> 0|1`, `rom`, `nvram`, `save`, `reset`,
-  `gain`, `factoryinit`
+  `gain`, `factoryinit`, `pcswitch <0|1|2>`, `sysparam <p> <d>`
 - Outlets: audio L/R (resampled from ~55.93 kHz to Pd's rate, Hermite),
   messages `lcd <line1> <line2>`, `led <mask>`, `midiout <byte>`
 - OSC: the help patch sends `/tx81z/lcd s s` and `/tx81z/led i` via UDP to
   `localhost:9000` (`[oscformat]` + `[netsend -u -b]`, port can be changed in the patch)
 - If the nvram file given as argument does not exist yet, `tx81z~` runs the
   factory init by itself (presets, MIDI setup, ~16 s) and saves the file.
+- Program changes only work if the TX81Z's **program change switch** (system
+  setup byte 3) is not *off*: `pcswitch 1` sets it to *com* (the factory init
+  does this automatically). `sysparam <p> <d>` sets any system setup byte via
+  SysEx (`F0 43 10 10 7B pp dd F7`).
 - Battery RAM is written on `save` and when the patch is closed. Quitting Pd
   directly does not always close all patches – press `save` first.
 
