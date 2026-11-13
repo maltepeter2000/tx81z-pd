@@ -26,20 +26,50 @@
 //                         given as argument does not exist yet
 //   buttons: store utility edit play param- param+ dec inc vol- vol+ cursor
 //
+// Voice parameters (controller layer, see tools/tx81z_params.py):
+//   <name> <value>        set a voice parameter with its TX81Z data value, e.g. alg 4, out1 99
+//   n <name> <0-127>      set it from a pot / CC position (range, zones in the external)
+//   ninfo <name>          report one parameter now as info
+//   vced <p> <d>, aced <p> <d>   raw parameter change (VCED 0-93, ACED 0-22)
+//   dumpreq               ask the firmware for the edit buffer (ACED + VCED dump)
+//   Parameter changes go to the firmware as SysEx (F0 43 10 12/13 pp dd F7). They are
+//   coalesced: only the newest value of a parameter is sent, and only while the
+//   emulated MIDI input is idle, so notes are never delayed by a turning knob.
+//   The firmware sends ACED + VCED dumps when a voice is selected (PLAY SINGLE);
+//   tx81z~ reads them from its MIDI Out, so it always knows the current values.
+//
 // Outlets: left / right audio, messages:
 //   lcd <line1> <line2>   on every LCD change (symbols)
 //   led <1-4 bitmask>
 //   midiout <byte>        MIDI Out of the TX81Z
+//   info <name> <0-127> <value text>   every parameter change (also its own)
+//   voice <name>          voice name from a VCED dump
 
 #include "m_pd.h"
 #include "tx81z.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 static t_class *tx81z_class;
+
+struct t_txparam
+{
+	const char *name;
+	char group;          // 'V' VCED, 'A' ACED
+	int num;             // parameter number in its group
+	int lo, hi;          // TX81Z data range
+	int offset;          // added for display (transpose -24, BC pitch bias -50)
+	const char *label;
+	const char *names;   // "a|b|c" for lo, lo+1, ... or "" for a number
+};
+#include "tx81z_params.h"
+
+enum { G_V = 0, G_A = 1 };
+static const int GROUP_SIZE[2] = { 94, 23 };
 
 struct t_tx81z
 {
@@ -60,6 +90,16 @@ struct t_tx81z
 	int init_stage;          // 0 = idle
 	bool nvram_ok;           // battery RAM file was loaded
 
+	// voice parameters
+	int shadow[2][128];      // current data value per VCED / ACED number, -1 = unknown
+	int pend[2][128];        // value waiting to be sent, -1 = none
+	int pend_next;           // round robin position
+	int reported[NTXPARAMS]; // last value reported as info
+	t_clock *rep_clock;      // reports changes (logical time of the change)
+	t_clock *req_clock;      // dump request after boot
+	std::vector<uint8_t> *sx; // SysEx from the firmware's MIDI Out
+	bool in_sx;
+
 	// resampler
 	double phase, step;
 	float hl[4], hr[4];
@@ -71,6 +111,157 @@ static std::string resolve(t_tx81z *x, t_symbol *s)
 	if (!p.empty() && p[0] != '/' && p[0] != '~' && !(p.size() > 1 && p[1] == ':'))
 		p = std::string(x->dir->s_name) + "/" + p;
 	return p;
+}
+
+// ---------------------------------------------------------------------------
+// voice parameters
+// ---------------------------------------------------------------------------
+
+static const t_txparam *find_param(t_symbol *s)
+{
+	for (int i = 0; i < NTXPARAMS; i++)
+		if (s == gensym(TXPARAMS[i].name)) return &TXPARAMS[i];
+	return 0;
+}
+
+static int gidx(const t_txparam *p) { return p->group == 'V' ? G_V : G_A; }
+
+static int nvalues(const t_txparam *p) { return p->hi - p->lo + 1; }
+
+// pot position -> data: up to 16 values in zones of equal width, more values linear
+static int from127(const t_txparam *p, float c)
+{
+	c = c < 0 ? 0 : c > 127 ? 127 : c;
+	int n = nvalues(p);
+	if (n <= 16) { int k = int(std::floor(c * n / 128.0f)); return p->lo + (k > n - 1 ? n - 1 : k); }
+	return p->lo + int(std::lround(c * (p->hi - p->lo) / 127.0f));
+}
+
+// data -> pot position (middle of the zone)
+static int to127(const t_txparam *p, int v)
+{
+	int n = nvalues(p);
+	float c = n <= 16 ? (v - p->lo + 0.5f) * 128.0f / n : (v - p->lo) * 127.0f / (p->hi - p->lo);
+	int r = int(std::lround(c));
+	return r < 0 ? 0 : r > 127 ? 127 : r;
+}
+
+static void value_text(const t_txparam *p, int v, char *buf, size_t nb)
+{
+	if (p->names[0])
+	{
+		int k = v - p->lo, n = 0;
+		const char *a = p->names, *q;
+		while (n < k && (q = std::strchr(a, '|'))) { a = q + 1; n++; }
+		q = std::strchr(a, '|');
+		int len = q ? int(q - a) : int(std::strlen(a));
+		std::snprintf(buf, nb, "%.*s", len, a);
+	}
+	else if (p->offset) std::snprintf(buf, nb, "%+d", v + p->offset);
+	else std::snprintf(buf, nb, "%d", v);
+}
+
+static void emit_info(t_tx81z *x, int i)
+{
+	const t_txparam *p = &TXPARAMS[i];
+	int v = x->shadow[gidx(p)][p->num];
+	if (v < 0) return;
+	v = v < p->lo ? p->lo : v > p->hi ? p->hi : v;
+	char buf[32];
+	value_text(p, v, buf, sizeof buf);
+	t_atom a[3];
+	SETSYMBOL(&a[0], gensym(p->name));
+	SETFLOAT(&a[1], to127(p, v));
+	SETSYMBOL(&a[2], gensym(buf));
+	outlet_anything(x->out_msg, gensym("info"), 3, a);
+}
+
+// every change is reported once as info (clock 0: in the logical time of the change)
+static void rep_tick(t_tx81z *x)
+{
+	for (int i = 0; i < NTXPARAMS; i++)
+	{
+		const t_txparam *p = &TXPARAMS[i];
+		int v = x->shadow[gidx(p)][p->num];
+		if (v < 0 || v == x->reported[i]) continue;
+		x->reported[i] = v;
+		emit_info(x, i);
+	}
+}
+
+static void set_param(t_tx81z *x, int g, int num, int v)
+{
+	if (num < 0 || num >= GROUP_SIZE[g]) return;
+	v = v < 0 ? 0 : v > 127 ? 127 : v;
+	x->shadow[g][num] = v;
+	x->pend[g][num] = v;
+	clock_delay(x->rep_clock, 0);
+}
+
+// one waiting parameter change into the emulated MIDI input, only when it is idle
+static void send_pending(t_tx81z *x)
+{
+	if (x->init_stage || x->synth->midi_in_pending() > 0) return;
+	const int total = GROUP_SIZE[G_V] + GROUP_SIZE[G_A];
+	for (int k = 0; k < total; k++)
+	{
+		int i = (x->pend_next + k) % total;
+		int g = i < GROUP_SIZE[G_V] ? G_V : G_A;
+		int num = g == G_V ? i : i - GROUP_SIZE[G_V];
+		if (x->pend[g][num] < 0) continue;
+		x->synth->midi_in({ 0xF0, 0x43, 0x10, uint8_t(g == G_V ? 0x12 : 0x13), uint8_t(num), uint8_t(x->pend[g][num]), 0xF7 });
+		x->pend[g][num] = -1;
+		x->pend_next = (i + 1) % total;
+		return;
+	}
+}
+
+static void dump_request(t_tx81z *x)
+{
+	static const uint8_t req[] = { 0xF0, 0x43, 0x20, 0x7E, 'L', 'M', ' ', ' ', '8', '9', '7', '6', 'A', 'E', 0xF7 };
+	x->synth->midi_in(req, sizeof req);
+}
+
+// SysEx from the firmware's MIDI Out: ACED / VCED dumps and parameter changes
+static void parse_sysex(t_tx81z *x)
+{
+	const std::vector<uint8_t> &m = *x->sx;
+	size_t n = m.size();
+	if (n < 7 || m[1] != 0x43) return;
+	if ((m[2] & 0xF0) == 0x00 && m[3] == 0x03 && n >= 6 + 93 + 2)              // VCED dump
+	{
+		for (int i = 0; i < 93; i++) x->shadow[G_V][i] = m[6 + i];
+		char nm[11];
+		for (int i = 0; i < 10; i++) { char c = char(m[6 + 77 + i]); nm[i] = (c >= 32 && c < 127) ? c : ' '; }
+		nm[10] = 0;
+		int e = 10; while (e > 0 && nm[e - 1] == ' ') nm[--e] = 0;
+		for (char *c = nm; *c; c++) if (*c == ' ') *c = '_';
+		t_atom a; SETSYMBOL(&a, gensym(nm));
+		outlet_anything(x->out_msg, gensym("voice"), 1, &a);
+	}
+	else if ((m[2] & 0xF0) == 0x00 && m[3] == 0x7E && n >= 16 + 23 + 2 &&
+		std::memcmp(&m[6], "LM  8976AE", 10) == 0)                           // ACED dump
+	{
+		for (int i = 0; i < 23; i++) x->shadow[G_A][i] = m[16 + i];
+	}
+	else if ((m[2] & 0xF0) == 0x10 && (m[3] == 0x12 || m[3] == 0x13) && n == 7)   // parameter change
+	{
+		int g = m[3] == 0x12 ? G_V : G_A;
+		if (m[4] < GROUP_SIZE[g]) x->shadow[g][m[4]] = m[5];
+	}
+	else return;
+	rep_tick(x);
+}
+
+static void midi_out_byte(t_tx81z *x, uint8_t b)
+{
+	if (b >= 0xF8) return;                       // realtime
+	if (b == 0xF0) { x->sx->clear(); x->sx->push_back(b); x->in_sx = true; return; }
+	if (!x->in_sx) return;
+	if (b & 0x80 && b != 0xF7) { x->in_sx = false; return; }
+	x->sx->push_back(b);
+	if (b == 0xF7) { x->in_sx = false; parse_sysex(x); }
+	else if (x->sx->size() > 512) x->in_sx = false;
 }
 
 static void tx81z_flush(t_tx81z *x)
@@ -105,6 +296,7 @@ static void tx81z_flush(t_tx81z *x)
 			t_atom a;
 			SETFLOAT(&a, b);
 			outlet_anything(x->out_msg, gensym("midiout"), 1, &a);
+			midi_out_byte(x, b);
 		}
 	}
 }
@@ -124,6 +316,8 @@ static t_int *tx81z_perform(t_int *w)
 		std::memset(outr, 0, n * sizeof(t_sample));
 		return w + 5;
 	}
+
+	send_pending(x);
 
 	for (int i = 0; i < n; i++)
 	{
@@ -173,6 +367,10 @@ static void tx81z_reset(t_tx81z *x)
 	x->phase = 0;
 	std::memset(x->hl, 0, sizeof(x->hl));
 	std::memset(x->hr, 0, sizeof(x->hr));
+	for (int g = 0; g < 2; g++)
+		for (int i = 0; i < 128; i++) { x->shadow[g][i] = -1; x->pend[g][i] = -1; }
+	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
+	clock_delay(x->req_clock, 7000);   // after the boot animation: ask for the edit buffer
 }
 
 static void tx81z_rom(t_tx81z *x, t_symbol *s)
@@ -295,6 +493,39 @@ static void tx81z_press(t_tx81z *x, t_symbol *s)
 
 static void tx81z_gain(t_tx81z *x, t_floatarg f) { x->gain = f; }
 
+// n <name> <0-127>: a parameter from a pot / CC position
+static void tx81z_n(t_tx81z *x, t_symbol *name, t_floatarg c)
+{
+	if (name == gensym("none")) return;
+	const t_txparam *p = find_param(name);
+	if (!p) { pd_error(x, "tx81z~: n: unknown parameter '%s'", name->s_name); return; }
+	set_param(x, gidx(p), p->num, from127(p, c));
+}
+
+static void tx81z_ninfo(t_tx81z *x, t_symbol *name)
+{
+	const t_txparam *p = find_param(name);
+	if (p) emit_info(x, int(p - TXPARAMS));
+}
+
+static void tx81z_vced(t_tx81z *x, t_floatarg p, t_floatarg d) { set_param(x, G_V, int(p), int(d)); }
+static void tx81z_aced(t_tx81z *x, t_floatarg p, t_floatarg d) { set_param(x, G_A, int(p), int(d)); }
+static void tx81z_dumpreq(t_tx81z *x) { if (x->rom_loaded && !x->init_stage) dump_request(x); }
+
+// <name> <value>: a voice parameter with its TX81Z data value
+static void tx81z_anything(t_tx81z *x, t_symbol *s, int argc, t_atom *argv)
+{
+	const t_txparam *p = find_param(s);
+	if (!p || argc < 1 || argv[0].a_type != A_FLOAT)
+	{
+		pd_error(x, "tx81z~: no method for '%s'", s->s_name);
+		return;
+	}
+	int v = int(std::lround(atom_getfloat(&argv[0])));
+	v = v < p->lo ? p->lo : v > p->hi ? p->hi : v;
+	set_param(x, gidx(p), p->num, v);
+}
+
 // System parameter change (service manual p.15/26): F0 43 1n 10 7B pp dd F7
 //   pp = SYS byte: 0 master tune, 1 basic receive ch (16 = omni), 2 transmit ch,
 //   3 program change switch (0 off, 1 com, 2 ind), 4 control change switch,
@@ -358,6 +589,7 @@ static void tx81z_init_tick(t_tx81z *x)
 		break;
 	case 7:
 		x->init_stage = 0;
+		dump_request(x);
 		if (!x->nvram_path->empty()) x->synth->save_nvram(*x->nvram_path);
 		post("tx81z~: factory init done (presets loaded, program change on, battery RAM saved)");
 		break;
@@ -412,6 +644,14 @@ static void *tx81z_new(t_symbol *, int argc, t_atom *argv)
 	x->init_clock = clock_new(x, (t_method)tx81z_init_tick);
 	x->init_stage = 0;
 	x->nvram_ok = false;
+	x->sx = new std::vector<uint8_t>();
+	x->in_sx = false;
+	x->pend_next = 0;
+	for (int g = 0; g < 2; g++)
+		for (int i = 0; i < 128; i++) { x->shadow[g][i] = -1; x->pend[g][i] = -1; }
+	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
+	x->rep_clock = clock_new(x, (t_method)rep_tick);
+	x->req_clock = clock_new(x, (t_method)tx81z_dumpreq);
 
 	// [tx81z~ <rom> <nvram>]
 	if (argc >= 2 && argv[1].a_type == A_SYMBOL)
@@ -434,6 +674,9 @@ static void tx81z_free(t_tx81z *x)
 	clock_free(x->clock);
 	clock_free(x->release_clock);
 	clock_free(x->init_clock);
+	clock_free(x->rep_clock);
+	clock_free(x->req_clock);
+	delete x->sx;
 	delete x->synth;
 	delete x->nvram_path;
 	delete x->midi_out;
@@ -469,5 +712,11 @@ void tx81z_tilde_setup(void)
 	class_addmethod(tx81z_class, (t_method)tx81z_factoryinit, gensym("factoryinit"), A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_sysparam, gensym("sysparam"), A_FLOAT, A_FLOAT, A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_pcswitch, gensym("pcswitch"), A_FLOAT, A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_n, gensym("n"), A_SYMBOL, A_FLOAT, A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_ninfo, gensym("ninfo"), A_SYMBOL, A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_vced, gensym("vced"), A_FLOAT, A_FLOAT, A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_aced, gensym("aced"), A_FLOAT, A_FLOAT, A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_dumpreq, gensym("dumpreq"), A_NULL);
+	class_addanything(tx81z_class, (t_method)tx81z_anything);
 }
 }

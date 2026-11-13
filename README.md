@@ -59,16 +59,26 @@ cd pd && make          # macOS: tx81z~.pd_darwin, Linux/Bela: tx81z~.pd_linux
 ```
 
 Open `tx81z~-help.pd`. The ROM (`tx81z-v1.6.bin`) and `tx81z~.pd_darwin` go into
-the same folder as the patch; the battery RAM file (`tx81z.nvram`) is created there.
+the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM file (`tx81z.nvram`) is created there.
 
 - Arguments: `[tx81z~ <rom> <nvram>]`, paths relative to the patch
 - Inlet: raw MIDI bytes (straight from `[midiin]`), `note`, `cc`, `pgm`, `bend`,
   `press <button>`, `button <button> 0|1`, `rom`, `nvram`, `save`, `reset`,
   `gain`, `factoryinit`, `pcswitch <0|1|2>`, `sysparam <p> <d>`
+- Voice parameters by name: `<name> <value>` (TX81Z data value, e.g. `alg 4`,
+  `out1 99`), `n <name> <0-127>` (from a pot or CC), `ninfo <name>`,
+  `vced <p> <d>` / `aced <p> <d>` (raw), `dumpreq`. All 100 names are listed in
+  the help patch and in `tools/tx81z_params.py`.
 - Outlets: audio L/R (resampled from ~55.93 kHz to Pd's rate, Hermite),
-  messages `lcd <line1> <line2>`, `led <mask>`, `midiout <byte>`
-- OSC: the help patch sends `/tx81z/lcd s s` and `/tx81z/led i` via UDP to
-  `localhost:9000` (`[oscformat]` + `[netsend -u -b]`, port can be changed in the patch)
+  messages `lcd <line1> <line2>`, `led <mask>`, `midiout <byte>`,
+  `info <name> <0-127> <value>` (for every parameter change, also after a program
+  change: the firmware sends its voice dump, `tx81z~` reads it), `voice <name>`
+- Parameter changes go to the firmware as SysEx; only the newest value per
+  parameter is sent, and only while the MIDI input is idle, so notes keep their timing.
+- `[txcc <channel>]`: controller layer (MIDI CC pages 20-119, feedback, pickup,
+  CC 3 = sync), the same layout as `p8cc` of pdoly8~. `[txedit <bus>]`: editor
+  with all parameters in rows of 8 (rows 1-11 = CC pages), voice name, program
+  change and LCD. Both are wired up in the help patch.
 - If the nvram file given as argument does not exist yet, `tx81z~` runs the
   factory init by itself (presets, MIDI setup, ~16 s) and saves the file.
 - Program changes only work if the TX81Z's **program change switch** (system
@@ -88,6 +98,9 @@ the same folder as the patch; the battery RAM file (`tx81z.nvram`) is created th
 | `src/hd44780.h` | minimal LCD controller |
 | `src/main.cpp` | command-line tool |
 | `pd/tx81z~.cpp`, `pd/Makefile`, `pd/tx81z~-help.pd` | Pd external and help patch |
+| `pd/txcc.pd`, `pd/txedit.pd`, `pd/tx81z_params.h` | controller layer, editor, parameter table (generated) |
+| `tools/tx81z_params.py` | the parameter table (source for the external, txcc, txedit and the help) |
+| `tools/gen_txcc.py`, `tools/gen_editor.py`, `tools/gen_help.py` | generators for `txcc.pd`, `txedit.pd`, `tx81z~-help.pd` |
 | `tests/make_test_rom.py` | self-written 6303 test ROM (no Yamaha code) |
 | `tools/opz_log.lua`, `tools/opz_decode.py` | MAME logger and decoder for comparisons |
 | `tools/set_message.py` | changes the power-on message in a battery RAM file |
