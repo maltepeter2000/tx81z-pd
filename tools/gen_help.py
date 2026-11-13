@@ -271,6 +271,8 @@ def build():
     # demo: a chord every second
     tg = p.add(f"#X obj {CX} {demo_y} tgl 19 0 empty empty empty 17 7 0 10 #fcfcfc #000000 #000000 0 1;")
     p.add(f"#X text {CX + 30} {demo_y} demo: a chord every second;")
+    p.add(f"#X msg {CX + 300} {demo_y} {SEMI} pd dsp 1;")
+    p.add(f"#X msg {CX + 380} {demo_y} {SEMI} pd dsp 0;")
     mt = p.add(f"#X obj {CX} {demo_y + STEP} metro 1000;")
     tb = p.add(f"#X obj {CX} {demo_y + 2 * STEP} t b b;")
     on = p.add(f"#X msg {CX + 160} {demo_y + 3 * STEP} note 43 100 {COMMA} note 50 100 {COMMA} note 58 100;")

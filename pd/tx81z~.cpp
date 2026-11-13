@@ -88,6 +88,7 @@ struct t_tx81z
 	int pressed;             // button currently "press"ed, -1 none
 	t_clock *init_clock;     // factory init sequence
 	int init_stage;          // 0 = idle
+	double init_wait;        // Pd samples until the next init step (runs only while DSP is on)
 	bool nvram_ok;           // battery RAM file was loaded
 
 	// voice parameters
@@ -318,6 +319,11 @@ static t_int *tx81z_perform(t_int *w)
 	}
 
 	send_pending(x);
+	if (x->init_stage && x->init_wait > 0)
+	{
+		x->init_wait -= n;
+		if (x->init_wait <= 0) clock_delay(x->init_clock, 0);   // next step in message context
+	}
 
 	for (int i = 0; i < n; i++)
 	{
@@ -550,6 +556,12 @@ static void tx81z_pcswitch(t_tx81z *x, t_floatarg f)
 // Factory init (service manual p.28): hold MASTER VOLUME + CURSOR at power-on
 // -> "Test Entry ?", INC loads the presets and sets the MIDI parameters,
 // then power-cycle and select PLAY mode.
+// the init steps are timed in emulated time: the CPU only runs while DSP is on
+static void init_after(t_tx81z *x, double ms)
+{
+	x->init_wait = ms * 0.001 * (sys_getsr() > 0 ? sys_getsr() : 44100);
+}
+
 static void tx81z_init_tick(t_tx81z *x)
 {
 	switch (x->init_stage)
@@ -558,34 +570,34 @@ static void tx81z_init_tick(t_tx81z *x)
 		x->synth->set_button(TX81Z::BTN_VOL_LEFT, false);
 		x->synth->set_button(TX81Z::BTN_CURSOR, false);
 		x->init_stage = 2;
-		clock_delay(x->init_clock, 2000);
+		init_after(x, 2000);
 		break;
 	case 2:  // INC: load presets
 		x->synth->set_button(TX81Z::BTN_INC, true);
 		x->init_stage = 3;
-		clock_delay(x->init_clock, 200);
+		init_after(x, 200);
 		break;
 	case 3:
 		x->synth->set_button(TX81Z::BTN_INC, false);
 		x->init_stage = 4;
-		clock_delay(x->init_clock, 2000);
+		init_after(x, 2000);
 		break;
 	case 4:  // power-cycle, battery RAM is kept
 		x->synth->reset();
 		x->init_stage = 5;
-		clock_delay(x->init_clock, 6000);
+		init_after(x, 6000);
 		break;
 	case 5:  // after the boot animation: PLAY mode
 		x->synth->set_button(TX81Z::BTN_PLAY, true);
 		x->init_stage = 6;
-		clock_delay(x->init_clock, 150);
+		init_after(x, 150);
 		break;
 	case 6:
 		x->synth->set_button(TX81Z::BTN_PLAY, false);
 		// program change switch -> "com", otherwise program changes are ignored
 		x->synth->midi_in({ 0xF0, 0x43, 0x10, 0x10, 0x7B, 0x03, 0x01, 0xF7 });
 		x->init_stage = 7;
-		clock_delay(x->init_clock, 500);
+		init_after(x, 500);
 		break;
 	case 7:
 		x->init_stage = 0;
@@ -609,7 +621,8 @@ static void tx81z_factoryinit(t_tx81z *x)
 	x->synth->set_button(TX81Z::BTN_CURSOR, true);
 	x->synth->reset();
 	x->init_stage = 1;
-	clock_delay(x->init_clock, 3000);
+	init_after(x, 3000);
+	if (!canvas_dspstate) post("tx81z~: switch DSP on, the factory init runs only while DSP is on");
 }
 
 // ---------------------------------------------------------------------------
@@ -643,6 +656,7 @@ static void *tx81z_new(t_symbol *, int argc, t_atom *argv)
 	x->release_clock = clock_new(x, (t_method)tx81z_release);
 	x->init_clock = clock_new(x, (t_method)tx81z_init_tick);
 	x->init_stage = 0;
+	x->init_wait = 0;
 	x->nvram_ok = false;
 	x->sx = new std::vector<uint8_t>();
 	x->in_sx = false;
