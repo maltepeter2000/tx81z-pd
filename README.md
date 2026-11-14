@@ -59,22 +59,57 @@ cd pd && make          # macOS: tx81z~.pd_darwin, Linux/Bela: tx81z~.pd_linux
 ```
 
 Open `tx81z~-help.pd`. The ROM (`tx81z-v1.6.bin`) and `tx81z~.pd_darwin` go into
-the same folder as the patch; the battery RAM file (`tx81z.nvram`) is created there.
+the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM file (`tx81z.nvram`) is created there.
 
 - Arguments: `[tx81z~ <rom> <nvram>]`, paths relative to the patch
 - Inlet: raw MIDI bytes (straight from `[midiin]`), `note`, `cc`, `pgm`, `bend`,
   `press <button>`, `button <button> 0|1`, `rom`, `nvram`, `save`, `reset`,
   `gain`, `factoryinit`, `pcswitch <0|1|2>`, `sysparam <p> <d>`
+- Voice parameters by name: `<name> <value>` (TX81Z data value, e.g. `alg 4`,
+  `out1 99`), `n <name> <0-127>` (from a pot or CC), `ninfo <name>`,
+  `vced <p> <d>` / `aced <p> <d>` (raw), `dumpreq` (also sent by itself after
+  every program change: the firmware does not send its voice on its own).
+- `channel <0-16>`: receive channel of the TX81Z (0 = omni). `note`, `cc`, `pgm`,
+  `bend` without a channel and all SysEx follow it (the firmware only takes SysEx
+  on its receive channel). Reported as `channel <n>` on outlet 2.
+- `getvoice` -> `voicedata <name> <93 VCED> <23 ACED>`; `voicedata ...` loads such
+  a voice into the edit buffer (ACED + VCED bulk dump).
+- `random <pluck|bass|lead|brass|pad|strings|total> [seed]`: a new voice of that
+  kind into the edit buffer (category ranges for algorithm, envelopes, levels,
+  frequency ratios and LFO; checked by measuring attack, decay and level of each kind).
+- The firmware needs about 35 ms per parameter change (it redraws its display);
+  faster changes end in "Midi Buffer Full", as on the real TX81Z. `tx81z~` sends one
+  change per 45 ms (the newest value of each parameter) and a whole voice with a
+  200 ms gap.
+- Dump requests wait until no key is down: the firmware stops taking notes when it
+  is asked for a dump while a key is held.
+- A program change in EDIT or UTILITY mode first presses PLAY (the firmware ignores
+  program changes there). All 100 names are listed in
+  the help patch and in `tools/tx81z_params.py`.
 - Outlets: audio L/R (resampled from ~55.93 kHz to Pd's rate, Hermite),
-  messages `lcd <line1> <line2>`, `led <mask>`, `midiout <byte>`
-- OSC: the help patch sends `/tx81z/lcd s s` and `/tx81z/led i` via UDP to
-  `localhost:9000` (`[oscformat]` + `[netsend -u -b]`, port can be changed in the patch)
+  messages `lcd <line1> <line2>`, `led <mask>`, `midiout <byte>`,
+  `info <name> <0-127> <value>` (for every parameter change, also after a program
+  change: the firmware sends its voice dump, `tx81z~` reads it), `voice <name>`
+- Parameter changes go to the firmware as SysEx; only the newest value per
+  parameter is sent, and only while the MIDI input is idle, so notes keep their timing.
+- `[txcc <channel>]`: controller layer (MIDI CC pages 20-119, feedback, pickup,
+  CC 3 = sync), the same layout as `p8cc` of pdoly8~. `[txedit <bus>]`: editor
+  with all parameters in rows of 8 (rows 1-11 = CC pages), voice name, program
+  change, LCD, MIDI channel and a user bank (64 slots in `txuser-bank.txt` next to
+  the editor: recall a slot, store to a slot, save / load the bank). `txcc` follows
+  the channel `tx81z~` reports. Both are wired up in the help patch.
 - If the nvram file given as argument does not exist yet, `tx81z~` runs the
-  factory init by itself (presets, MIDI setup, ~16 s) and saves the file.
+  factory init by itself (~26 s, only while DSP is on): presets, then MIDI
+  Control via the front panel (receive omni, program change, control change,
+  pitch bend and **Exclusive on**), and saves the file. The test-mode presets
+  leave Exclusive off, and with it off the firmware ignores all SysEx
+  (parameter changes, `pcswitch`, `sysparam`, dump requests).
 - Program changes only work if the TX81Z's **program change switch** (system
   setup byte 3) is not *off*: `pcswitch 1` sets it to *com* (the factory init
-  does this automatically). `sysparam <p> <d>` sets any system setup byte via
-  SysEx (`F0 43 10 10 7B pp dd F7`).
+  does this). `sysparam <p> <d>` sets any system setup byte via SysEx
+  (`F0 43 10 10 7B pp dd F7`, verified with the firmware: 0 master tune,
+  1 receive channel, 2 transmit channel, 3 program change, 4 control change,
+  5 pitch bend, 6 note on/off, 7 Exclusive, 8 memory protect, 9 combine).
 - Battery RAM is written on `save` and when the patch is closed. Quitting Pd
   directly does not always close all patches – press `save` first.
 
@@ -88,6 +123,9 @@ the same folder as the patch; the battery RAM file (`tx81z.nvram`) is created th
 | `src/hd44780.h` | minimal LCD controller |
 | `src/main.cpp` | command-line tool |
 | `pd/tx81z~.cpp`, `pd/Makefile`, `pd/tx81z~-help.pd` | Pd external and help patch |
+| `pd/txcc.pd`, `pd/txedit.pd`, `pd/tx81z_params.h` | controller layer, editor, parameter table (generated) |
+| `tools/tx81z_params.py` | the parameter table (source for the external, txcc, txedit and the help) |
+| `tools/gen_txcc.py`, `tools/gen_editor.py`, `tools/gen_help.py` | generators for `txcc.pd`, `txedit.pd`, `tx81z~-help.pd` |
 | `tests/make_test_rom.py` | self-written 6303 test ROM (no Yamaha code) |
 | `tools/opz_log.lua`, `tools/opz_decode.py` | MAME logger and decoder for comparisons |
 | `tools/set_message.py` | changes the power-on message in a battery RAM file |
