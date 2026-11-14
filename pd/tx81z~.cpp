@@ -22,7 +22,7 @@
 //                         off, or program changes are ignored)
 //   sysparam <p> <d>      any system setup parameter (SYS byte p, value d)
 //   factoryinit           load the presets / reset the MIDI setup (test mode
-//                         init, ~16 s); runs automatically if the nvram file
+//                         init, ~26 s of DSP time); runs automatically if the nvram file
 //                         given as argument does not exist yet
 //   buttons: store utility edit play param- param+ dec inc vol- vol+ cursor
 //
@@ -88,6 +88,7 @@ struct t_tx81z
 	int pressed;             // button currently "press"ed, -1 none
 	t_clock *init_clock;     // factory init sequence
 	int init_stage;          // 0 = idle
+	int init_seq;            // step in the front panel sequence of the factory init
 	double init_wait;        // Pd samples until the next init step (runs only while DSP is on)
 	bool nvram_ok;           // battery RAM file was loaded
 
@@ -95,6 +96,7 @@ struct t_tx81z
 	int shadow[2][128];      // current data value per VCED / ACED number, -1 = unknown
 	int pend[2][128];        // value waiting to be sent, -1 = none
 	int pend_next;           // round robin position
+	double sent_at[2][128];  // logical time a change went to the firmware (a dump just after it is older)
 	int reported[NTXPARAMS]; // last value reported as info
 	t_clock *rep_clock;      // reports changes (logical time of the change)
 	t_clock *req_clock;      // dump request after boot
@@ -212,6 +214,7 @@ static void send_pending(t_tx81z *x)
 		if (x->pend[g][num] < 0) continue;
 		x->synth->midi_in({ 0xF0, 0x43, 0x10, uint8_t(g == G_V ? 0x12 : 0x13), uint8_t(num), uint8_t(x->pend[g][num]), 0xF7 });
 		x->pend[g][num] = -1;
+		x->sent_at[g][num] = clock_getlogicaltime();
 		x->pend_next = (i + 1) % total;
 		return;
 	}
@@ -224,6 +227,11 @@ static void dump_request(t_tx81z *x)
 }
 
 // SysEx from the firmware's MIDI Out: ACED / VCED dumps and parameter changes
+static bool recent(t_tx81z *x, int g, int num)
+{
+	return x->pend[g][num] >= 0 || (x->sent_at[g][num] > 0 && clock_gettimesince(x->sent_at[g][num]) < 500);
+}
+
 static void parse_sysex(t_tx81z *x)
 {
 	const std::vector<uint8_t> &m = *x->sx;
@@ -231,7 +239,8 @@ static void parse_sysex(t_tx81z *x)
 	if (n < 7 || m[1] != 0x43) return;
 	if ((m[2] & 0xF0) == 0x00 && m[3] == 0x03 && n >= 6 + 93 + 2)              // VCED dump
 	{
-		for (int i = 0; i < 93; i++) x->shadow[G_V][i] = m[6 + i];
+		// changes waiting or just sent win over the dump: the firmware applies them after it
+		for (int i = 0; i < 93; i++) if (!recent(x, G_V, i)) x->shadow[G_V][i] = m[6 + i];
 		char nm[11];
 		for (int i = 0; i < 10; i++) { char c = char(m[6 + 77 + i]); nm[i] = (c >= 32 && c < 127) ? c : ' '; }
 		nm[10] = 0;
@@ -243,7 +252,7 @@ static void parse_sysex(t_tx81z *x)
 	else if ((m[2] & 0xF0) == 0x00 && m[3] == 0x7E && n >= 16 + 23 + 2 &&
 		std::memcmp(&m[6], "LM  8976AE", 10) == 0)                           // ACED dump
 	{
-		for (int i = 0; i < 23; i++) x->shadow[G_A][i] = m[16 + i];
+		for (int i = 0; i < 23; i++) if (!recent(x, G_A, i)) x->shadow[G_A][i] = m[16 + i];
 	}
 	else if ((m[2] & 0xF0) == 0x10 && (m[3] == 0x12 || m[3] == 0x13) && n == 7)   // parameter change
 	{
@@ -374,7 +383,7 @@ static void tx81z_reset(t_tx81z *x)
 	std::memset(x->hl, 0, sizeof(x->hl));
 	std::memset(x->hr, 0, sizeof(x->hr));
 	for (int g = 0; g < 2; g++)
-		for (int i = 0; i < 128; i++) { x->shadow[g][i] = -1; x->pend[g][i] = -1; }
+		for (int i = 0; i < 128; i++) { x->shadow[g][i] = -1; x->pend[g][i] = -1; x->sent_at[g][i] = 0; }
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
 	clock_delay(x->req_clock, 7000);   // after the boot animation: ask for the edit buffer
 }
@@ -587,23 +596,42 @@ static void tx81z_init_tick(t_tx81z *x)
 		x->init_stage = 5;
 		init_after(x, 6000);
 		break;
-	case 5:  // after the boot animation: PLAY mode
-		x->synth->set_button(TX81Z::BTN_PLAY, true);
+	case 5:  // after the boot animation the firmware is in PLAY SINGLE
+		x->init_seq = 0;
 		x->init_stage = 6;
-		init_after(x, 150);
+		init_after(x, 100);
 		break;
-	case 6:
-		x->synth->set_button(TX81Z::BTN_PLAY, false);
-		// program change switch -> "com", otherwise program changes are ignored
-		x->synth->midi_in({ 0xF0, 0x43, 0x10, 0x10, 0x7B, 0x03, 0x01, 0xF7 });
-		x->init_stage = 7;
-		init_after(x, 500);
+	case 6:  // MIDI setup by the front panel (SysEx is ignored until Exclusive is on)
+	{
+		static const TX81Z::Button seq[] = {
+			TX81Z::BTN_UTILITY, TX81Z::BTN_PARAM_RIGHT, TX81Z::BTN_INC,     // UTILITY > MIDI Control
+			TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC,   // Basic Rcv.Ch 1 -> omni
+			TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC,
+			TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC,
+			TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC, TX81Z::BTN_INC,
+			TX81Z::BTN_PARAM_RIGHT,                                          // Transmit Ch (1)
+			TX81Z::BTN_PARAM_RIGHT, TX81Z::BTN_INC,                          // P.Change off -> com
+			TX81Z::BTN_PARAM_RIGHT, TX81Z::BTN_INC,                          // Cont.Change off -> norm
+			TX81Z::BTN_PARAM_RIGHT,                                          // A.Touch > BC (off)
+			TX81Z::BTN_PARAM_RIGHT, TX81Z::BTN_INC,                          // Pitch Bend off -> norm
+			TX81Z::BTN_PARAM_RIGHT,                                          // Note on/off (all)
+			TX81Z::BTN_PARAM_RIGHT, TX81Z::BTN_INC,                          // Exclusive off -> on
+			TX81Z::BTN_PLAY,                                                 // back to PLAY SINGLE
+		};
+		const int n = int(sizeof seq / sizeof seq[0]);
+		int k = x->init_seq / 2;
+		bool down = (x->init_seq % 2) == 0;
+		x->synth->set_button(seq[k], down);
+		x->init_seq++;
+		if (x->init_seq >= 2 * n) { x->init_stage = 7; init_after(x, 500); }
+		else init_after(x, down ? 150 : 250);
 		break;
+	}
 	case 7:
 		x->init_stage = 0;
 		dump_request(x);
 		if (!x->nvram_path->empty()) x->synth->save_nvram(*x->nvram_path);
-		post("tx81z~: factory init done (presets loaded, program change on, battery RAM saved)");
+		post("tx81z~: factory init done (presets, MIDI omni, program change, control change, pitch bend and SysEx on, battery RAM saved)");
 		break;
 	default:
 		x->init_stage = 0;
@@ -614,7 +642,7 @@ static void tx81z_init_tick(t_tx81z *x)
 static void tx81z_factoryinit(t_tx81z *x)
 {
 	if (!x->rom_loaded) { pd_error(x, "tx81z~: load a ROM first"); return; }
-	post("tx81z~: factory init (about 16 s) ...");
+	post("tx81z~: factory init (about 26 s, needs DSP on) ...");
 	tx81z_release(x);
 	for (int b = 0; b < TX81Z::BTN_COUNT; b++) x->synth->set_button(TX81Z::Button(b), false);
 	x->synth->set_button(TX81Z::BTN_VOL_LEFT, true);
@@ -662,7 +690,7 @@ static void *tx81z_new(t_symbol *, int argc, t_atom *argv)
 	x->in_sx = false;
 	x->pend_next = 0;
 	for (int g = 0; g < 2; g++)
-		for (int i = 0; i < 128; i++) { x->shadow[g][i] = -1; x->pend[g][i] = -1; }
+		for (int i = 0; i < 128; i++) { x->shadow[g][i] = -1; x->pend[g][i] = -1; x->sent_at[g][i] = 0; }
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
 	x->rep_clock = clock_new(x, (t_method)rep_tick);
 	x->req_clock = clock_new(x, (t_method)tx81z_dumpreq);

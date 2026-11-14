@@ -80,11 +80,17 @@ the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM f
   with all parameters in rows of 8 (rows 1-11 = CC pages), voice name, program
   change and LCD. Both are wired up in the help patch.
 - If the nvram file given as argument does not exist yet, `tx81z~` runs the
-  factory init by itself (presets, MIDI setup, ~16 s) and saves the file.
+  factory init by itself (~26 s, only while DSP is on): presets, then MIDI
+  Control via the front panel (receive omni, program change, control change,
+  pitch bend and **Exclusive on**), and saves the file. The test-mode presets
+  leave Exclusive off, and with it off the firmware ignores all SysEx
+  (parameter changes, `pcswitch`, `sysparam`, dump requests).
 - Program changes only work if the TX81Z's **program change switch** (system
   setup byte 3) is not *off*: `pcswitch 1` sets it to *com* (the factory init
-  does this automatically). `sysparam <p> <d>` sets any system setup byte via
-  SysEx (`F0 43 10 10 7B pp dd F7`).
+  does this). `sysparam <p> <d>` sets any system setup byte via SysEx
+  (`F0 43 10 10 7B pp dd F7`, verified with the firmware: 0 master tune,
+  1 receive channel, 2 transmit channel, 3 program change, 4 control change,
+  5 pitch bend, 6 note on/off, 7 Exclusive, 8 memory protect, 9 combine).
 - Battery RAM is written on `save` and when the patch is closed. Quitting Pd
   directly does not always close all patches – press `save` first.
 

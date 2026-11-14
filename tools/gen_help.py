@@ -150,7 +150,7 @@ def box_w(text):
 EXBLOCKS = [
     ("Program change", ["The TX81Z selects I01-C32 with program changes 0-127 (I 0-31, A 32-63, "
                         "B 64-95, C 96-127). Bank D only via its program change table. Program changes "
-                        "need the program change switch on (pcswitch 1, the factory init sets it). After "
+                        "need the program change switch on (the factory init sets it, or pcswitch 1). After "
                         "every voice change the firmware sends its voice dump: tx81z~ reads it, the editor "
                         "and the controller follow."],
      ["pgm 110", "pgm 32", "pgm 0", "pcswitch 1", "dumpreq"]),
@@ -231,8 +231,10 @@ def build():
             f"Arguments: [{OBJ} <firmware> <battery RAM file>], paths relative to the patch. The firmware "
             f"(64 KB, e.g. {ROM} from the MAME set tx81z) is not included. The battery RAM file keeps "
             "voices, performances and the system setup. If it does not exist, tx81z~ runs the factory "
-            "init (test mode, about 16 s): presets into the internal memory, MIDI omni on, program change "
-            "switch on, PLAY mode, then it saves the file."], True),
+            "init (about 26 s of DSP time, it runs only while DSP is on): test mode loads the presets into "
+            "the internal memory, then the front panel sets MIDI Control: receive omni, program change, "
+            "control change, pitch bend and Exclusive on. Without Exclusive on the firmware ignores all "
+            "SysEx, so parameter changes and the editor would not work. Then it saves the file."], True),
     ]
 
     placed = []
