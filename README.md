@@ -67,7 +67,15 @@ the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM f
   `gain`, `factoryinit`, `pcswitch <0|1|2>`, `sysparam <p> <d>`
 - Voice parameters by name: `<name> <value>` (TX81Z data value, e.g. `alg 4`,
   `out1 99`), `n <name> <0-127>` (from a pot or CC), `ninfo <name>`,
-  `vced <p> <d>` / `aced <p> <d>` (raw), `dumpreq`. All 100 names are listed in
+  `vced <p> <d>` / `aced <p> <d>` (raw), `dumpreq` (also sent by itself after
+  every program change: the firmware does not send its voice on its own).
+- `channel <0-16>`: receive channel of the TX81Z (0 = omni). `note`, `cc`, `pgm`,
+  `bend` without a channel and all SysEx follow it (the firmware only takes SysEx
+  on its receive channel). Reported as `channel <n>` on outlet 2.
+- `getvoice` -> `voicedata <name> <93 VCED> <23 ACED>`; `voicedata ...` loads such
+  a voice into the edit buffer (ACED + VCED bulk dump).
+- A program change in EDIT or UTILITY mode first presses PLAY (the firmware ignores
+  program changes there). All 100 names are listed in
   the help patch and in `tools/tx81z_params.py`.
 - Outlets: audio L/R (resampled from ~55.93 kHz to Pd's rate, Hermite),
   messages `lcd <line1> <line2>`, `led <mask>`, `midiout <byte>`,
@@ -78,7 +86,9 @@ the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM f
 - `[txcc <channel>]`: controller layer (MIDI CC pages 20-119, feedback, pickup,
   CC 3 = sync), the same layout as `p8cc` of pdoly8~. `[txedit <bus>]`: editor
   with all parameters in rows of 8 (rows 1-11 = CC pages), voice name, program
-  change and LCD. Both are wired up in the help patch.
+  change, LCD, MIDI channel and a user bank (64 slots in `txuser-bank.txt` next to
+  the editor: recall a slot, store to a slot, save / load the bank). `txcc` follows
+  the channel `tx81z~` reports. Both are wired up in the help patch.
 - If the nvram file given as argument does not exist yet, `tx81z~` runs the
   factory init by itself (~26 s, only while DSP is on): presets, then MIDI
   Control via the front panel (receive omni, program change, control change,

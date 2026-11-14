@@ -33,8 +33,9 @@ ALL = [n for _, ns in ROWS for n in ns if n]
 assert len(ALL) == len(set(ALL)) == len(T.PARAMS)
 
 CW, ROWH, X0 = 80, 88, 10
+NSLOTS = 64   # user bank slots
 BAND_Y = 44
-TOP = BAND_Y + 96
+TOP = BAND_Y + 110
 X1 = X0 + 8 * CW + 30
 BAND = ("#ececec", "#dcdcdc")
 
@@ -69,21 +70,32 @@ def bng(c, x, y, send, text):
 def top_band(c):
     """voice name and LCD of the TX81Z, program change, refresh"""
     y = BAND_Y
-    c.add(f"#X obj {X0 - 4} {y} cnv 15 {8 * CW} 86 empty empty VOICE 4 8 0 10 #e4ecf4 #404040 0;")
+    c.add(f"#X obj {X0 - 4} {y} cnv 15 {8 * CW} 100 empty empty VOICE 4 8 0 10 #e4ecf4 #404040 0;")
     c.add(f"#X text {X0} {y + 20} name;")
     c.add(f"#X symbolatom {X0 + 40} {y + 20} 12 0 0 0 - {D}0-voice -;")
     c.add(f"#X text {X0 + 170} {y + 20} bank;")
     c.add(f"#X obj {X0 + 206} {y + 20} hradio 17 1 0 4 {D}0-bank {D}0-bankv empty 0 -8 0 10 #fcfcfc #000000 #000000 0;")
-    c.add(f"#X text {X0 + 206} {y + 40} I{SP}{SP}A{SP}{SP}B{SP}{SP}C;")
+    c.add(f"#X text {X0 + 206} {y + 2} I{SP}{SP}A{SP}{SP}B{SP}{SP}C;")
     c.add(f"#X text {X0 + 286} {y + 20} patch;")
     c.add(f"#X floatatom {X0 + 326} {y + 20} 3 1 32 0 - {D}0-patchv {D}0-patch;")
     c.add(f"#X text {X0 + 366} {y + 20} = program;")
     c.add(f"#X floatatom {X0 + 436} {y + 20} 3 0 0 0 - {D}0-prog -;")
     bng(c, X0 + 8 * CW - 110, y + 20, "refresh", "refresh")
-    c.add(f"#X text {X0} {y + 60} bank and patch send a program change (I01-C32 = 0-127) {COMMA} the firmware "
-          f"answers with its voice dump and every cell follows., f 104;")
+    # MIDI channel and the user bank
+    c.add(f"#X text {X0} {y + 44} MIDI ch;")
+    c.add(f"#X floatatom {X0 + 52} {y + 44} 3 0 16 0 - {D}0-chv {D}0-ch;")
+    c.add(f"#X text {X0 + 82} {y + 44} 0=omni;")
+    c.add(f"#X text {X0 + 150} {y + 44} user;")
+    c.add(f"#X floatatom {X0 + 184} {y + 44} 3 0 63 0 - - {D}0-urecall;")
+    c.add(f"#X text {X0 + 218} {y + 44} store to;")
+    c.add(f"#X floatatom {X0 + 274} {y + 44} 3 0 63 0 - - {D}0-ustore;")
+    bng(c, X0 + 314, y + 44, "usave", "save bank")
+    bng(c, X0 + 414, y + 44, "uload", "load bank")
+    c.add(f"#X text {X0} {y + 66} program change: bank + patch. MIDI ch: TX81Z receive channel (notes {COMMA} "
+          f"controller layer {COMMA} SysEx). user N: slot N of txuser-bank.txt (next to the editor) {COMMA} "
+          f"store to N saves the voice there and writes the file., f 104;")
     x1 = X1
-    c.add(f"#X obj {x1 - 4} {y} cnv 15 {8 * CW} 86 empty empty TX81Z{SP}LCD 4 8 0 10 #f4ece4 #404040 0;")
+    c.add(f"#X obj {x1 - 4} {y} cnv 15 {8 * CW} 100 empty empty TX81Z{SP}LCD 4 8 0 10 #f4ece4 #404040 0;")
     c.add(f"#X symbolatom {x1} {y + 20} 20 0 0 0 - {D}0-lcd0 -;")
     c.add(f"#X symbolatom {x1} {y + 42} 20 0 0 0 - {D}0-lcd1 -;")
     c.add(f"#X text {x1 + 200} {y + 20} the display of the emulated TX81Z. Changes from the editor go to the "
@@ -161,7 +173,7 @@ def logic():
     # replies -> cells, voice name, LCD
     y2 = yp + 300
     ro = c.add(f"#X obj 10 {y2} r {D}1-out;")
-    ri = c.add(f"#X obj 10 {y2 + 30} route info voice lcd;"); c.conn(ro, 0, ri, 0)
+    ri = c.add(f"#X obj 10 {y2 + 30} route info voice lcd channel voicedata;"); c.conn(ro, 0, ri, 0)
     lp = c.add(f"#X obj 10 {y2 + 60} list prepend {D}0;")   # route info gives the list: name 0-127 text
     stm = c.add(f"#X msg 10 {y2 + 90} {SEMI} {D}1-v-{D}2 set {D}3 {SEMI} {D}1-t-{D}2 set {D}4;")
     c.conn(ri, 0, lp, 0); c.conn(lp, 0, stm, 0)
@@ -171,6 +183,41 @@ def logic():
     ll = c.add(f"#X obj 450 {y2 + 60} list prepend {D}0;"); c.conn(ri, 2, ll, 0)
     ml = c.add(f"#X msg 450 {y2 + 90} {SEMI} {D}1-lcd0 set {D}2 {SEMI} {D}1-lcd1 set {D}3;"); c.conn(ll, 0, ml, 0)
     c.add(f"#X text 650 {y2 + 30} info <name> <0-127> <value text> -> slider / number and text of the cell, f 50;")
+    # MIDI channel: channel <0-16> to tx81z~, its report back into the box
+    rch = c.add(f"#X obj 650 {y2 + 90} r {D}0-ch;")
+    mch = c.add(f"#X msg 650 {y2 + 120} channel {D}1;"); c.conn(rch, 0, mch, 0)
+    sch = c.add(f"#X obj 650 {y2 + 150} s {D}1;"); c.conn(mch, 0, sch, 0)
+    mcv = c.add(f"#X msg 600 {y2 + 90} set {D}1;"); c.conn(ri, 3, mcv, 0)
+    scv = c.add(f"#X obj 600 {y2 + 120} s {D}0-chv;"); c.conn(mcv, 0, scv, 0)
+    # user bank: 64 slots in txuser-bank.txt next to the editor (- = empty)
+    yu = y2 + 220
+    td = c.add(f"#X obj 10 {yu + 330} text define -k {D}0-ubank;")
+    lbu = c.add(f"#X obj 10 {yu} loadbang;")
+    rld = c.add(f"#X obj 100 {yu} r {D}0-uload;")
+    mrd = c.add(f"#X msg 10 {yu + 30} read txuser-bank.txt;"); c.conn(lbu, 0, mrd, 0); c.conn(rld, 0, mrd, 0)
+    c.conn(mrd, 0, td, 0)
+    rsv = c.add(f"#X obj 200 {yu} r {D}0-usave;")
+    mwr = c.add(f"#X msg 200 {yu + 60} write txuser-bank.txt;"); c.conn(rsv, 0, mwr, 0); c.conn(mwr, 0, td, 0)
+    # recall: slot -> text get -> voicedata ... -> tx81z~
+    rrc = c.add(f"#X obj 400 {yu} r {D}0-urecall;")
+    tgu = c.add(f"#X obj 400 {yu + 30} text get {D}0-ubank;"); c.conn(rrc, 0, tgu, 0)
+    lt1 = c.add(f"#X obj 400 {yu + 60} list trim;"); c.conn(tgu, 0, lt1, 0)
+    rdu = c.add(f"#X obj 400 {yu + 90} route -;"); c.conn(lt1, 0, rdu, 0)
+    lpv = c.add(f"#X obj 450 {yu + 120} list prepend voicedata;"); c.conn(rdu, 1, lpv, 0)
+    lt2 = c.add(f"#X obj 450 {yu + 150} list trim;"); c.conn(lpv, 0, lt2, 0)
+    su = c.add(f"#X obj 450 {yu + 180} s {D}1;"); c.conn(lt2, 0, su, 0)
+    # store to N: getvoice, the answer voicedata ... into line N, then write the file
+    rst = c.add(f"#X obj 650 {yu} r {D}0-ustore;")
+    tst = c.add(f"#X obj 650 {yu + 30} t b b f;"); c.conn(rst, 0, tst, 0)
+    one = c.add(f"#X msg 700 {yu + 60} 1;"); c.conn(tst, 1, one, 0)
+    mgv = c.add(f"#X msg 650 {yu + 90} getvoice;"); c.conn(tst, 0, mgv, 0)
+    sgv = c.add(f"#X obj 650 {yu + 120} s {D}1;"); c.conn(mgv, 0, sgv, 0)
+    lvd = c.add(f"#X obj 850 {y2 + 60} list;"); c.conn(ri, 4, lvd, 0)
+    spg = c.add(f"#X obj 850 {yu + 90} spigot;"); c.conn(lvd, 0, spg, 0); c.conn(one, 0, spg, 1)
+    tsu = c.add(f"#X obj 850 {yu + 150} t b l;"); c.conn(spg, 0, tsu, 0)
+    tse = c.add(f"#X obj 850 {yu + 300} text set {D}0-ubank;"); c.conn(tsu, 1, tse, 0); c.conn(tst, 2, tse, 1)
+    zero = c.add(f"#X msg 950 {yu + 180} 0;"); c.conn(tsu, 0, zero, 0); c.conn(zero, 0, spg, 1)
+    dlw = c.add(f"#X obj 950 {yu + 210} del 10;"); c.conn(tsu, 0, dlw, 0); c.conn(dlw, 0, mwr, 0)
     return c
 
 
@@ -179,7 +226,12 @@ def build():
     gui(c)
     lg = logic()
     rows = max(len(LEFT), len(RIGHT))
-    sub = ["#N canvas 40 40 1260 900 logic 0;"] + lg.lines + lg.conns + [f"#X restore {X0} {TOP + rows * ROWH + 4} pd logic;"]
+    body = []
+    for ln in lg.lines:
+        body.append(ln)
+        if ln.endswith("text define -k " + D + "0-ubank;"):   # 64 empty slots until the file is read
+            body.append("#A set " + " ".join(["- " + SEMI] * NSLOTS) + ";")
+    sub = ["#N canvas 40 40 1260 900 logic 0;"] + body + lg.conns + [f"#X restore {X0} {TOP + rows * ROWH + 4} pd logic;"]
     h = TOP + rows * ROWH + 34
     return "\n".join([f"#N canvas 20 20 {X1 + 8 * CW + 10} {h} 10;"] + c.lines + sub + c.conns) + "\n"
 
@@ -187,4 +239,7 @@ def build():
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "pd", "txedit.pd")
     open(out, "w").write(build())
+    bank = os.path.join(os.path.dirname(out), "txuser-bank.txt")
+    if not os.path.exists(bank):   # the empty user bank (never overwrite your sounds)
+        open(bank, "w").write("-;\n" * NSLOTS)
     print("wrote", out, f"({len(ALL)} settings)")

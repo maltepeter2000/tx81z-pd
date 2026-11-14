@@ -180,7 +180,9 @@ def build():
     y = dac_y + 2 * STEP + BOX + 32
 
     cc = [f"[txcc {CHANNEL}] above is the controller layer of tx81z~ (the same as p8cc of pdoly8~): "
-          f"MIDI CC on channel {CHANNEL} (the argument, 0 = all channels) -> n <name> <value> onto the bus. "
+          f"MIDI CC on the instrument's channel -> n <name> <value> onto the bus. The argument ({CHANNEL}) is "
+          "the channel until tx81z~ reports its receive channel (channel <n> on outlet 2, set in the editor "
+          "or with the channel message): then [txcc] follows it, 0 = omni = all channels. "
           "Every instrument has its own channel and the same CC pages, so the controller keeps one setup: "
           "page k = row k in the editor.",
           "Pages: 20-119 without 32, 38, 64-69, 84, 88, 96-101.",
@@ -197,7 +199,8 @@ def build():
     sections = [
         ("Inlets and outlets", ["Inlet: messages (see Messages)",
                                 "Outlet 0, 1: signal left / right (~55.9 kHz resampled)",
-                                "Outlet 2: lcd, led, midiout, info, voice"]),
+                                "Outlet 2: lcd, led, midiout, info, voice, channel,",
+                                "  voicedata"]),
         ("Messages", [
             "note <p> <v> [ch], cc <n> <v> [ch], pgm <n> [ch],",
             "  bend <-8192..8191> [ch]: MIDI to the TX81Z",
@@ -208,7 +211,13 @@ def build():
             "ninfo <name>: outlet 2 gets info <name> <0-127> <value>,",
             "  every change is reported this way by itself",
             "vced <p> <d>, aced <p> <d>: raw parameter change",
-            "dumpreq: ask the firmware for the edit buffer",
+            "dumpreq: ask the firmware for the edit buffer (also",
+            "  done by itself after every program change)",
+            "channel <0-16>: receive channel of the TX81Z, 0 = omni.",
+            "  note, cc, pgm, bend without [ch] and SysEx follow it",
+            "getvoice: outlet 2 gets voicedata <name> <93 VCED>",
+            "  <23 ACED>, voicedata ...: that voice into the edit",
+            "  buffer (bulk dump), as the editor's user bank does",
             "press <button>, button <button> 0/1: front panel",
             "rom <file>, nvram <file>, save, reset: firmware and",
             "  battery RAM (saved on save and when the patch closes)",
@@ -220,7 +229,12 @@ def build():
             "[txedit " + bus.replace(BS, "") + "] above: click it to open the editor. All 100 voice "
             "parameters in rows of 8: rows 1-11 are the CC pages of the controller layer, then two rows "
             "without CC. Each cell: name and CC number, slider and number box 0-127 (n <name> <value>) "
-            "and the value as on the TX81Z. On top: voice name, program change (bank + patch), the LCD.",
+            "and the value as on the TX81Z. On top: voice name, program change (bank + patch), the LCD, "
+            "the MIDI channel (receive channel of the TX81Z, 0 = omni: notes, controller layer and SysEx "
+            "follow it) and the user bank: 64 slots in txuser-bank.txt next to the editor. user N loads "
+            "slot N, store to N saves the current voice in slot N and writes the file, save / load bank "
+            "write and read it. A program change in EDIT mode first presses PLAY (the firmware ignores "
+            "program changes while editing). To keep a voice in the TX81Z itself: STORE on the front panel.",
             "It sends to the bus and reads outlet 2 from the -out bus: tx81z~ reports every change there "
             "(info), so the controller, program changes and messages show up in it. In your own patch: "
             "[txedit <name>] next to [r <name>] -> [tx81z~] -> outlet 2 -> [s <name>-out]."], True),
@@ -302,7 +316,7 @@ def build():
     rco = p.add(f"#X obj {CX} {cc_y} r {out};")
     pcc = p.add(f"#X obj {CX} {cc_y + STEP} txcc {CHANNEL};")
     scc = p.add(f"#X obj {CX} {cc_y + 2 * STEP} s {bus};")
-    p.add(f"#X text {CX + 130} {cc_y + STEP} <- controller layer: CC pages on channel {CHANNEL};")
+    p.add(f"#X text {CX + 130} {cc_y + STEP} <- controller layer: CC pages on the MIDI channel;")
     p.conn(rco, 0, pcc, 0); p.conn(pcc, 0, scc, 0)
     cols = [("notein", "pack f f f", f"note {DOLLAR}1 {DOLLAR}2 {DOLLAR}3", 3),
             ("ctlin", "pack f f f", f"cc {DOLLAR}2 {DOLLAR}1 {DOLLAR}3", 3),
@@ -334,8 +348,10 @@ def build():
     l0 = p.add(f"#X symbolatom {CX + 150} {dac_y + STEP} 16 0 0 0 - - -;")
     l1 = p.add(f"#X symbolatom {CX + 150} {dac_y + 2 * STEP} 16 0 0 0 - - -;")
     p.conn(un, 0, l0, 0); p.conn(un, 1, l1, 0)
+    lvn = p.add(f"#X obj {CX + 300} {dac_y} list;")
+    p.conn(rl, 1, lvn, 0)
     vn = p.add(f"#X symbolatom {CX + 300} {dac_y + STEP} 10 0 0 0 - - -;")
-    p.conn(rl, 1, vn, 0)
+    p.conn(lvn, 0, vn, 0)
     p.add(f"#X text {CX + 300} {dac_y + 2 * STEP} LCD / voice name;")
     p.add(f"#X obj {CX + 300} {r_y} txedit {bus};")
     p.add(f"#X text {CX + 300} {obj_y} <- click: editor;")

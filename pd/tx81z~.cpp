@@ -96,6 +96,10 @@ struct t_tx81z
 	int shadow[2][128];      // current data value per VCED / ACED number, -1 = unknown
 	int pend[2][128];        // value waiting to be sent, -1 = none
 	int pend_next;           // round robin position
+	int rx_reported;         // receive channel last reported (channel outlet)
+	t_clock *play_clock;     // PLAY press before a program change / after a system change
+	int play_stage;
+	std::vector<uint8_t> *after_play; // MIDI bytes sent once PLAY is released
 	double sent_at[2][128];  // logical time a change went to the firmware (a dump just after it is older)
 	int reported[NTXPARAMS]; // last value reported as info
 	t_clock *rep_clock;      // reports changes (logical time of the change)
@@ -201,6 +205,18 @@ static void set_param(t_tx81z *x, int g, int num, int v)
 	clock_delay(x->rep_clock, 0);
 }
 
+// system setup in battery RAM (found by comparing RAM dumps): 0x1565 master tune,
+// 0x1566 receive channel (0-15, 16 = omni), 0x1567 transmit channel, 0x1568 program change
+// switch, 0x1569 control change, 0x156A pitch bend, 0x156B note on/off, 0x156C Exclusive
+enum { SYS_RAM = 0x1565 };
+
+// the firmware only takes SysEx on its receive channel (any channel with omni)
+static uint8_t rxch(t_tx81z *x)
+{
+	int c = x->synth->ram(SYS_RAM + 1);
+	return uint8_t(c >= 16 ? 0 : c);
+}
+
 // one waiting parameter change into the emulated MIDI input, only when it is idle
 static void send_pending(t_tx81z *x)
 {
@@ -212,7 +228,7 @@ static void send_pending(t_tx81z *x)
 		int g = i < GROUP_SIZE[G_V] ? G_V : G_A;
 		int num = g == G_V ? i : i - GROUP_SIZE[G_V];
 		if (x->pend[g][num] < 0) continue;
-		x->synth->midi_in({ 0xF0, 0x43, 0x10, uint8_t(g == G_V ? 0x12 : 0x13), uint8_t(num), uint8_t(x->pend[g][num]), 0xF7 });
+		x->synth->midi_in({ 0xF0, 0x43, uint8_t(0x10 | rxch(x)), uint8_t(g == G_V ? 0x12 : 0x13), uint8_t(num), uint8_t(x->pend[g][num]), 0xF7 });
 		x->pend[g][num] = -1;
 		x->sent_at[g][num] = clock_getlogicaltime();
 		x->pend_next = (i + 1) % total;
@@ -222,7 +238,7 @@ static void send_pending(t_tx81z *x)
 
 static void dump_request(t_tx81z *x)
 {
-	static const uint8_t req[] = { 0xF0, 0x43, 0x20, 0x7E, 'L', 'M', ' ', ' ', '8', '9', '7', '6', 'A', 'E', 0xF7 };
+	const uint8_t req[] = { 0xF0, 0x43, uint8_t(0x20 | rxch(x)), 0x7E, 'L', 'M', ' ', ' ', '8', '9', '7', '6', 'A', 'E', 0xF7 };
 	x->synth->midi_in(req, sizeof req);
 }
 
@@ -274,6 +290,8 @@ static void midi_out_byte(t_tx81z *x, uint8_t b)
 	else if (x->sx->size() > 512) x->in_sx = false;
 }
 
+static void report_channel(t_tx81z *x);
+
 static void tx81z_flush(t_tx81z *x)
 {
 	if (x->synth->lcd_changed())
@@ -289,6 +307,7 @@ static void tx81z_flush(t_tx81z *x)
 			outlet_anything(x->out_msg, gensym("lcd"), 2, a);
 		}
 	}
+	if (!x->init_stage) report_channel(x);
 	uint8_t leds = x->synth->leds();
 	if (leds != x->last_leds)
 	{
@@ -424,7 +443,10 @@ static void tx81z_bytes(t_tx81z *x, int argc, t_atom *argv)
 	for (int i = 0; i < argc; i++)
 		if (argv[i].a_type == A_FLOAT)
 			b.push_back(uint8_t(int(atom_getfloat(&argv[i])) & 0xff));
-	if (!b.empty()) x->synth->midi_in(b.data(), b.size());
+	if (b.empty()) return;
+	x->synth->midi_in(b.data(), b.size());
+	// the firmware does not send its voice after a program change: ask for it
+	for (uint8_t c : b) if ((c & 0xF0) == 0xC0) { clock_delay(x->req_clock, 400); break; }
 }
 
 static void tx81z_float(t_tx81z *x, t_floatarg f)
@@ -436,9 +458,11 @@ static void tx81z_float(t_tx81z *x, t_floatarg f)
 static void tx81z_list(t_tx81z *x, t_symbol *, int argc, t_atom *argv) { tx81z_bytes(x, argc, argv); }
 static void tx81z_midi(t_tx81z *x, t_symbol *, int argc, t_atom *argv) { tx81z_bytes(x, argc, argv); }
 
+static t_tx81z *cur_x;   // for chan(): the object whose message is being handled
+
 static uint8_t chan(int argc, t_atom *argv, int idx)
 {
-	int c = argc > idx ? int(atom_getfloat(&argv[idx])) : 1;
+	int c = argc > idx ? int(atom_getfloat(&argv[idx])) : (cur_x ? rxch(cur_x) + 1 : 1);
 	if (c < 1) c = 1;
 	if (c > 16) c = 16;
 	return uint8_t(c - 1);
@@ -450,6 +474,7 @@ static void tx81z_note(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 {
 	if (argc < 2) return;
 	uint8_t p = b7(atom_getfloat(&argv[0])), v = b7(atom_getfloat(&argv[1]));
+	cur_x = x;
 	uint8_t c = chan(argc, argv, 2);
 	if (v) x->synth->midi_in({ uint8_t(0x90 | c), p, v });
 	else x->synth->midi_in({ uint8_t(0x80 | c), p, 0 });
@@ -458,18 +483,132 @@ static void tx81z_note(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 static void tx81z_cc(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 {
 	if (argc < 2) return;
+	cur_x = x;
 	x->synth->midi_in({ uint8_t(0xB0 | chan(argc, argv, 2)), b7(atom_getfloat(&argv[0])), b7(atom_getfloat(&argv[1])) });
+}
+
+// in PLAY (single or performance) send the bytes now, otherwise press PLAY, release it,
+// then send them
+static bool in_play(t_tx81z *x)
+{
+	std::string l0 = x->synth->lcd_line(0);
+	return l0.compare(0, 4, "PLAY") == 0 || l0.compare(0, 2, "PF") == 0;
+}
+
+static void play_tick(t_tx81z *x)
+{
+	if (x->play_stage == 1)
+	{
+		x->synth->set_button(TX81Z::BTN_PLAY, false);
+		x->play_stage = 2;
+		clock_delay(x->play_clock, 150);
+		return;
+	}
+	x->play_stage = 0;
+	if (!x->after_play->empty()) x->synth->midi_in(x->after_play->data(), x->after_play->size());
+	x->after_play->clear();
+}
+
+static void play_then(t_tx81z *x, std::initializer_list<uint8_t> bytes)
+{
+	if (x->init_stage) return;
+	if (x->play_stage) { x->after_play->insert(x->after_play->end(), bytes); return; }
+	bool sys = bytes.size() == 0;   // after a system change: the UTILITY page opens a moment later
+	if (!sys && in_play(x)) { x->synth->midi_in(bytes.begin(), bytes.size()); return; }
+	x->after_play->assign(bytes);
+	x->play_stage = sys ? 3 : 1;
+	if (sys) clock_delay(x->play_clock, 100);
+	else { x->synth->set_button(TX81Z::BTN_PLAY, true); clock_delay(x->play_clock, 120); }
+}
+
+static void play_tick_entry(t_tx81z *x)
+{
+	if (x->play_stage == 3)   // system change: press now (if UTILITY opened)
+	{
+		if (in_play(x)) { x->play_stage = 0; return; }
+		x->synth->set_button(TX81Z::BTN_PLAY, true);
+		x->play_stage = 1;
+		clock_delay(x->play_clock, 120);
+		return;
+	}
+	play_tick(x);
+}
+
+// receive channel: 0 = omni, 1-16. Messages without a channel and SysEx follow it.
+static void tx81z_channel(t_tx81z *x, t_floatarg f)
+{
+	int c = int(f);
+	if (c < 0 || c > 16) { pd_error(x, "tx81z~: channel 0 (omni) / 1-16"); return; }
+	if (x->init_stage) return;
+	x->synth->midi_in({ 0xF0, 0x43, uint8_t(0x10 | rxch(x)), 0x10, 0x7B, 1, uint8_t(c == 0 ? 16 : c - 1), 0xF7 });
+	play_then(x, {});
+}
+
+static void report_channel(t_tx81z *x)
+{
+	int c = x->synth->ram(SYS_RAM + 1);
+	c = c >= 16 ? 0 : c + 1;
+	if (c == x->rx_reported) return;
+	x->rx_reported = c;
+	t_atom a;
+	SETFLOAT(&a, c);
+	outlet_anything(x->out_msg, gensym("channel"), 1, &a);
+}
+
+// the whole voice: getvoice -> voicedata <name> <93 VCED> <23 ACED> (data as in the TX81Z dumps,
+// the name also as one symbol, spaces as _); voicedata ... -> ACED + VCED bulk dump to the
+// firmware's edit buffer
+static void tx81z_getvoice(t_tx81z *x)
+{
+	for (int i = 0; i < 93; i++) if (x->shadow[G_V][i] < 0) { pd_error(x, "tx81z~: voice not known yet (dumpreq first)"); return; }
+	for (int i = 0; i < 23; i++) if (x->shadow[G_A][i] < 0) { pd_error(x, "tx81z~: voice not known yet (dumpreq first)"); return; }
+	char name[11];
+	for (int i = 0; i < 10; i++) { int c = x->shadow[G_V][77 + i]; name[i] = (c > 32 && c < 127) ? char(c) : '_'; }
+	name[10] = 0;
+	t_atom a[117];
+	SETSYMBOL(&a[0], gensym(name));
+	for (int i = 0; i < 93; i++) SETFLOAT(&a[1 + i], x->shadow[G_V][i]);
+	for (int i = 0; i < 23; i++) SETFLOAT(&a[94 + i], x->shadow[G_A][i]);
+	outlet_anything(x->out_msg, gensym("voicedata"), 117, a);
+}
+
+static void tx81z_voicedata(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
+{
+	if (argc == 117 || (argc > 0 && argv[0].a_type == A_SYMBOL)) { argc--; argv++; }   // the name (a symbol, or a number for a name like 2001)
+	if (argc < 116) { pd_error(x, "tx81z~: voicedata needs 93 VCED + 23 ACED values"); return; }
+	if (x->init_stage) return;
+	uint8_t ch = rxch(x);
+	std::vector<uint8_t> a = { 0xF0, 0x43, ch, 0x7E, 0x00, 0x21, 'L', 'M', ' ', ' ', '8', '9', '7', '6', 'A', 'E' };
+	int sum = 0;
+	for (int i = 6; i < 16; i++) sum += a[i];
+	for (int i = 0; i < 23; i++) { uint8_t v = b7(atom_getfloat(&argv[93 + i])); a.push_back(v); sum += v; }
+	a.push_back(uint8_t((-sum) & 0x7F)); a.push_back(0xF7);
+	std::vector<uint8_t> v = { 0xF0, 0x43, ch, 0x03, 0x00, 0x5D };
+	sum = 0;
+	for (int i = 0; i < 93; i++) { uint8_t d = b7(atom_getfloat(&argv[i])); v.push_back(d); sum += d; }
+	v.push_back(uint8_t((-sum) & 0x7F)); v.push_back(0xF7);
+	for (int g = 0; g < 2; g++) for (int i = 0; i < 128; i++) x->pend[g][i] = -1;   // the dump replaces them
+	x->synth->midi_in(a.data(), a.size());
+	x->synth->midi_in(v.data(), v.size());
+	for (int i = 0; i < 93; i++) x->shadow[G_V][i] = v[6 + i];
+	for (int i = 0; i < 23; i++) x->shadow[G_A][i] = a[16 + i];
+	clock_delay(x->rep_clock, 0);
+	clock_delay(x->req_clock, 400);   // read back what the firmware made of it (name, LCD)
 }
 
 static void tx81z_pgm(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 {
 	if (argc < 1) return;
-	x->synth->midi_in({ uint8_t(0xC0 | chan(argc, argv, 1)), b7(atom_getfloat(&argv[0])) });
+	cur_x = x;
+	// the firmware ignores program changes in EDIT and UTILITY mode: press PLAY first
+	play_then(x, { uint8_t(0xC0 | chan(argc, argv, 1)), b7(atom_getfloat(&argv[0])) });
+	clock_delay(x->req_clock, 700);   // then read the new voice (name, values for the editor)
 }
 
 static void tx81z_bend(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 {
 	if (argc < 1) return;
+	cur_x = x;
 	int v = int(atom_getfloat(&argv[0])) + 8192;
 	v = v < 0 ? 0 : v > 16383 ? 16383 : v;
 	x->synth->midi_in({ uint8_t(0xE0 | chan(argc, argv, 1)), uint8_t(v & 0x7f), uint8_t(v >> 7) });
@@ -551,7 +690,8 @@ static void tx81z_sysparam(t_tx81z *x, t_floatarg p, t_floatarg d)
 	if (x->init_stage) return;   // factory init in progress (it sets the switch itself)
 	int pp = int(p), dd = int(d);
 	if (pp < 0 || pp > 26 || dd < 0 || dd > 127) { pd_error(x, "tx81z~: sysparam <0-26> <0-127>"); return; }
-	x->synth->midi_in({ 0xF0, 0x43, 0x10, 0x10, 0x7B, uint8_t(pp), uint8_t(dd), 0xF7 });
+	x->synth->midi_in({ 0xF0, 0x43, uint8_t(0x10 | rxch(x)), 0x10, 0x7B, uint8_t(pp), uint8_t(dd), 0xF7 });
+	play_then(x, {});   // a system change opens UTILITY on the TX81Z: back to PLAY
 }
 
 // program change switch: 0 off, 1 com, 2 ind
@@ -694,6 +834,10 @@ static void *tx81z_new(t_symbol *, int argc, t_atom *argv)
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
 	x->rep_clock = clock_new(x, (t_method)rep_tick);
 	x->req_clock = clock_new(x, (t_method)tx81z_dumpreq);
+	x->play_clock = clock_new(x, (t_method)play_tick_entry);
+	x->play_stage = 0;
+	x->rx_reported = -1;
+	x->after_play = new std::vector<uint8_t>;
 
 	// [tx81z~ <rom> <nvram>]
 	if (argc >= 2 && argv[1].a_type == A_SYMBOL)
@@ -718,6 +862,8 @@ static void tx81z_free(t_tx81z *x)
 	clock_free(x->init_clock);
 	clock_free(x->rep_clock);
 	clock_free(x->req_clock);
+	clock_free(x->play_clock);
+	delete x->after_play;
 	delete x->sx;
 	delete x->synth;
 	delete x->nvram_path;
@@ -759,6 +905,9 @@ void tx81z_tilde_setup(void)
 	class_addmethod(tx81z_class, (t_method)tx81z_vced, gensym("vced"), A_FLOAT, A_FLOAT, A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_aced, gensym("aced"), A_FLOAT, A_FLOAT, A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_dumpreq, gensym("dumpreq"), A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_channel, gensym("channel"), A_FLOAT, A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_getvoice, gensym("getvoice"), A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_voicedata, gensym("voicedata"), A_GIMME, A_NULL);
 	class_addanything(tx81z_class, (t_method)tx81z_anything);
 }
 }

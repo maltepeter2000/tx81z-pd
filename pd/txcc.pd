@@ -1,5 +1,5 @@
 #N canvas 0 50 900 900 10;
-#X text 10 6 txcc (tx81z~): controller layer - CC pages 20-119 (without 32 38 64-69 84 88 96-101) on channel \$1 (0 = all) -> n <name> <0-127>. Inlet: info <name> <0-127> <text> from the instrument \, pickup 0/1 \, sync (also CC 3 from the controller). Changes from elsewhere go back to the controller as CC (ctlout) \, pickup avoids jumps. Table: line = CC number \, the setting or -., f 100;
+#X text 10 6 txcc (tx81z~): controller layer - CC pages 20-119 (without 32 38 64-69 84 88 96-101) on channel \$1 (0 = all) -> n <name> <0-127>. Inlet: info <name> <0-127> <text> from the instrument \, pickup 0/1 \, sync (also CC 3 from the controller) \, channel <n> (0 = all \; the instrument reports its channel). Changes from elsewhere go back to the controller as CC (ctlout) \, pickup avoids jumps. Table: line = CC number \, the setting or -., f 100;
 #X obj 10 60 loadbang;
 #X obj 10 90 t b b b b;
 #X msg 10 120 const 1;
@@ -46,7 +46,7 @@
 #X obj 120 850 list trim;
 #X obj 120 880 outlet;
 #X obj 10 940 inlet;
-#X obj 10 970 route info pickup sync;
+#X obj 10 970 route info pickup sync channel;
 #X msg 560 1000 ninfo alg \, ninfo fb \, ninfo out1 \, ninfo out2 \, ninfo out3 \, ninfo out4 \, ninfo trps \, ninfo rev \, ninfo crs1 \, ninfo fin1 \, ninfo osw1 \, ninfo ar1 \, ninfo d1r1 \, ninfo d1l1 \, ninfo d2r1 \, ninfo rr1 \, ninfo crs2 \, ninfo fin2 \, ninfo osw2 \, ninfo ar2 \, ninfo d1r2 \, ninfo d1l2 \, ninfo d2r2 \, ninfo rr2 \, ninfo crs3 \, ninfo fin3 \, ninfo osw3 \, ninfo ar3 \, ninfo d1r3 \, ninfo d1l3 \, ninfo d2r3 \, ninfo rr3 \, ninfo crs4 \, ninfo fin4 \, ninfo osw4 \, ninfo ar4 \, ninfo d1r4 \, ninfo d1l4 \, ninfo d2r4 \, ninfo rr4 \, ninfo det1 \, ninfo det2 \, ninfo det3 \, ninfo det4 \, ninfo kvs1 \, ninfo kvs2 \, ninfo kvs3 \, ninfo kvs4 \, ninfo lfw \, ninfo lfs \, ninfo lfd \, ninfo pmd \, ninfo amd \, ninfo pms \, ninfo ams \, ninfo sync \, ninfo rs1 \, ninfo rs2 \, ninfo rs3 \, ninfo rs4 \, ninfo ls1 \, ninfo ls2 \, ninfo ls3 \, ninfo ls4 \, ninfo fix1 \, ninfo fix2 \, ninfo fix3 \, ninfo fix4 \, ninfo ame1 \, ninfo ame2 \, ninfo ame3 \, ninfo ame4 \, ninfo sh1 \, ninfo sh2 \, ninfo sh3 \, ninfo sh4 \, ninfo ebs1 \, ninfo ebs2 \, ninfo ebs3 \, ninfo ebs4 \, ninfo pbr \, ninfo port \, ninfo mwp \, ninfo mwa;
 #X obj 300 440 sel 3;
 #X obj 160 1000 list;
@@ -127,6 +127,7 @@
 #X connect 43 0 44 0;
 #X connect 44 0 45 0;
 #X connect 46 0 47 0;
+#X connect 47 3 11 0;
 #X connect 47 1 34 4;
 #X connect 47 2 48 0;
 #X connect 13 0 48 0;

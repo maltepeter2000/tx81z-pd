@@ -64,6 +64,7 @@ public:
 	void lcd_line_chars(int n, char *out17) const { m_lcd.line_chars(n, out17); }   // real-time safe
 	bool lcd_changed() { return m_lcd.dirty(); }
 	bool lcd_changed_peek() const { return m_lcd.dirty_peek(); }
+	uint8_t ram(int addr) const { return m_ram[addr & 0x1fff]; }   // battery RAM (system setup etc.)
 	uint8_t leds() const { return m_leds; }
 	double time() const { return double(m_samples) / sample_rate(); }
 
