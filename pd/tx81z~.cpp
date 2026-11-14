@@ -53,6 +53,10 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <random>
+#include <ctime>
+#include <cctype>
+#include <cstring>
 
 static t_class *tx81z_class;
 
@@ -97,6 +101,10 @@ struct t_tx81z
 	int pend[2][128];        // value waiting to be sent, -1 = none
 	int pend_next;           // round robin position
 	int rx_reported;         // receive channel last reported (channel outlet)
+	uint8_t held[16][128];   // keys down (from the MIDI going in)
+	int nheld;
+	bool req_wanted;         // a dump request waits until no key is down
+	uint8_t trk_status, trk_d1, trk_n;   // running status of the MIDI going in
 	t_clock *play_clock;     // PLAY press before a program change / after a system change
 	int play_stage;
 	std::vector<uint8_t> *after_play; // MIDI bytes sent once PLAY is released
@@ -243,6 +251,18 @@ static void dump_request(t_tx81z *x)
 }
 
 // SysEx from the firmware's MIDI Out: ACED / VCED dumps and parameter changes
+// voice <name> on outlet 2 (spaces as _)
+static void emit_voice_name(t_tx81z *x, const uint8_t *n10)
+{
+	char nm[11];
+	for (int i = 0; i < 10; i++) { char c = char(n10[i]); nm[i] = (c >= 32 && c < 127) ? c : ' '; }
+	nm[10] = 0;
+	int e = 10; while (e > 0 && nm[e - 1] == ' ') nm[--e] = 0;
+	for (char *c = nm; *c; c++) if (*c == ' ') *c = '_';
+	t_atom a; SETSYMBOL(&a, gensym(nm));
+	outlet_anything(x->out_msg, gensym("voice"), 1, &a);
+}
+
 static bool recent(t_tx81z *x, int g, int num)
 {
 	return x->pend[g][num] >= 0 || (x->sent_at[g][num] > 0 && clock_gettimesince(x->sent_at[g][num]) < 500);
@@ -257,13 +277,7 @@ static void parse_sysex(t_tx81z *x)
 	{
 		// changes waiting or just sent win over the dump: the firmware applies them after it
 		for (int i = 0; i < 93; i++) if (!recent(x, G_V, i)) x->shadow[G_V][i] = m[6 + i];
-		char nm[11];
-		for (int i = 0; i < 10; i++) { char c = char(m[6 + 77 + i]); nm[i] = (c >= 32 && c < 127) ? c : ' '; }
-		nm[10] = 0;
-		int e = 10; while (e > 0 && nm[e - 1] == ' ') nm[--e] = 0;
-		for (char *c = nm; *c; c++) if (*c == ' ') *c = '_';
-		t_atom a; SETSYMBOL(&a, gensym(nm));
-		outlet_anything(x->out_msg, gensym("voice"), 1, &a);
+		emit_voice_name(x, m.data() + 6 + 77);
 	}
 	else if ((m[2] & 0xF0) == 0x00 && m[3] == 0x7E && n >= 16 + 23 + 2 &&
 		std::memcmp(&m[6], "LM  8976AE", 10) == 0)                           // ACED dump
@@ -399,6 +413,8 @@ static void tx81z_reset(t_tx81z *x)
 		x->nvram_ok = x->synth->load_nvram(*x->nvram_path);
 	x->synth->reset();
 	x->phase = 0;
+	memset(x->held, 0, sizeof x->held);
+	x->nheld = 0;
 	std::memset(x->hl, 0, sizeof(x->hl));
 	std::memset(x->hr, 0, sizeof(x->hr));
 	for (int g = 0; g < 2; g++)
@@ -437,6 +453,43 @@ static void tx81z_save(t_tx81z *x)
 	else pd_error(x, "tx81z~: could not write %s", x->nvram_path->c_str());
 }
 
+// keys down, from every MIDI byte that goes to the firmware
+static void track(t_tx81z *x, const uint8_t *d, size_t n)
+{
+	for (size_t i = 0; i < n; i++)
+	{
+		uint8_t b = d[i];
+		if (b >= 0xF8) continue;
+		if (b >= 0xF0) { x->trk_status = 0; continue; }
+		if (b & 0x80) { x->trk_status = b; x->trk_n = 0; continue; }
+		uint8_t st = x->trk_status & 0xF0, ch = x->trk_status & 0x0F;
+		if (st == 0x80 || st == 0x90 || st == 0xB0)
+		{
+			if (x->trk_n == 0) { x->trk_d1 = b; x->trk_n = 1; continue; }
+			x->trk_n = 0;
+			if (st == 0xB0)
+			{
+				if (x->trk_d1 == 120 || x->trk_d1 == 123)
+					for (int k = 0; k < 128; k++) if (x->held[ch][k]) { x->held[ch][k] = 0; x->nheld--; }
+			}
+			else
+			{
+				bool on = st == 0x90 && b > 0;
+				uint8_t &h = x->held[ch][x->trk_d1];
+				if (on && !h) { h = 1; x->nheld++; }
+				else if (!on && h) { h = 0; x->nheld--; }
+			}
+			if (x->nheld == 0 && x->req_wanted) clock_delay(x->req_clock, 30);
+		}
+	}
+}
+
+static void fw_in(t_tx81z *x, std::initializer_list<uint8_t> bytes)
+{
+	track(x, bytes.begin(), bytes.size());
+	x->synth->midi_in(bytes.begin(), bytes.size());
+}
+
 static void tx81z_bytes(t_tx81z *x, int argc, t_atom *argv)
 {
 	std::vector<uint8_t> b;
@@ -444,6 +497,7 @@ static void tx81z_bytes(t_tx81z *x, int argc, t_atom *argv)
 		if (argv[i].a_type == A_FLOAT)
 			b.push_back(uint8_t(int(atom_getfloat(&argv[i])) & 0xff));
 	if (b.empty()) return;
+	track(x, b.data(), b.size());
 	x->synth->midi_in(b.data(), b.size());
 	// the firmware does not send its voice after a program change: ask for it
 	for (uint8_t c : b) if ((c & 0xF0) == 0xC0) { clock_delay(x->req_clock, 400); break; }
@@ -476,15 +530,15 @@ static void tx81z_note(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 	uint8_t p = b7(atom_getfloat(&argv[0])), v = b7(atom_getfloat(&argv[1]));
 	cur_x = x;
 	uint8_t c = chan(argc, argv, 2);
-	if (v) x->synth->midi_in({ uint8_t(0x90 | c), p, v });
-	else x->synth->midi_in({ uint8_t(0x80 | c), p, 0 });
+	if (v) fw_in(x, { uint8_t(0x90 | c), p, v });
+	else fw_in(x, { uint8_t(0x80 | c), p, 0 });
 }
 
 static void tx81z_cc(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 {
 	if (argc < 2) return;
 	cur_x = x;
-	x->synth->midi_in({ uint8_t(0xB0 | chan(argc, argv, 2)), b7(atom_getfloat(&argv[0])), b7(atom_getfloat(&argv[1])) });
+	fw_in(x, { uint8_t(0xB0 | chan(argc, argv, 2)), b7(atom_getfloat(&argv[0])), b7(atom_getfloat(&argv[1])) });
 }
 
 // in PLAY (single or performance) send the bytes now, otherwise press PLAY, release it,
@@ -572,20 +626,31 @@ static void tx81z_getvoice(t_tx81z *x)
 	outlet_anything(x->out_msg, gensym("voicedata"), 117, a);
 }
 
+static void send_voice(t_tx81z *x, const uint8_t *vc, const uint8_t *ac);
+
 static void tx81z_voicedata(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 {
 	if (argc == 117 || (argc > 0 && argv[0].a_type == A_SYMBOL)) { argc--; argv++; }   // the name (a symbol, or a number for a name like 2001)
 	if (argc < 116) { pd_error(x, "tx81z~: voicedata needs 93 VCED + 23 ACED values"); return; }
+	uint8_t vc[93], ac[23];
+	for (int i = 0; i < 93; i++) vc[i] = b7(atom_getfloat(&argv[i]));
+	for (int i = 0; i < 23; i++) ac[i] = b7(atom_getfloat(&argv[93 + i]));
+	send_voice(x, vc, ac);
+}
+
+// a whole voice into the firmware's edit buffer: ACED + VCED bulk dump
+static void send_voice(t_tx81z *x, const uint8_t *vc, const uint8_t *ac)
+{
 	if (x->init_stage) return;
 	uint8_t ch = rxch(x);
 	std::vector<uint8_t> a = { 0xF0, 0x43, ch, 0x7E, 0x00, 0x21, 'L', 'M', ' ', ' ', '8', '9', '7', '6', 'A', 'E' };
 	int sum = 0;
 	for (int i = 6; i < 16; i++) sum += a[i];
-	for (int i = 0; i < 23; i++) { uint8_t v = b7(atom_getfloat(&argv[93 + i])); a.push_back(v); sum += v; }
+	for (int i = 0; i < 23; i++) { a.push_back(ac[i] & 0x7F); sum += ac[i] & 0x7F; }
 	a.push_back(uint8_t((-sum) & 0x7F)); a.push_back(0xF7);
 	std::vector<uint8_t> v = { 0xF0, 0x43, ch, 0x03, 0x00, 0x5D };
 	sum = 0;
-	for (int i = 0; i < 93; i++) { uint8_t d = b7(atom_getfloat(&argv[i])); v.push_back(d); sum += d; }
+	for (int i = 0; i < 93; i++) { v.push_back(vc[i] & 0x7F); sum += vc[i] & 0x7F; }
 	v.push_back(uint8_t((-sum) & 0x7F)); v.push_back(0xF7);
 	for (int g = 0; g < 2; g++) for (int i = 0; i < 128; i++) x->pend[g][i] = -1;   // the dump replaces them
 	x->synth->midi_in(a.data(), a.size());
@@ -593,7 +658,7 @@ static void tx81z_voicedata(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 	for (int i = 0; i < 93; i++) x->shadow[G_V][i] = v[6 + i];
 	for (int i = 0; i < 23; i++) x->shadow[G_A][i] = a[16 + i];
 	clock_delay(x->rep_clock, 0);
-	clock_delay(x->req_clock, 400);   // read back what the firmware made of it (name, LCD)
+	emit_voice_name(x, vc + 77);
 }
 
 static void tx81z_pgm(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
@@ -664,7 +729,16 @@ static void tx81z_ninfo(t_tx81z *x, t_symbol *name)
 
 static void tx81z_vced(t_tx81z *x, t_floatarg p, t_floatarg d) { set_param(x, G_V, int(p), int(d)); }
 static void tx81z_aced(t_tx81z *x, t_floatarg p, t_floatarg d) { set_param(x, G_A, int(p), int(d)); }
-static void tx81z_dumpreq(t_tx81z *x) { if (x->rom_loaded && !x->init_stage) dump_request(x); }
+// The firmware stops taking notes when it is asked for a dump while a key is down (found with
+// the v1.6 firmware: even the note off of that key is lost). So a dump request waits until
+// all keys are up.
+static void tx81z_dumpreq(t_tx81z *x)
+{
+	if (!x->rom_loaded || x->init_stage) return;
+	if (x->nheld > 0) { x->req_wanted = true; return; }
+	x->req_wanted = false;
+	dump_request(x);
+}
 
 // <name> <value>: a voice parameter with its TX81Z data value
 static void tx81z_anything(t_tx81z *x, t_symbol *s, int argc, t_atom *argv)
@@ -837,6 +911,10 @@ static void *tx81z_new(t_symbol *, int argc, t_atom *argv)
 	x->play_clock = clock_new(x, (t_method)play_tick_entry);
 	x->play_stage = 0;
 	x->rx_reported = -1;
+	memset(x->held, 0, sizeof x->held);
+	x->nheld = 0;
+	x->req_wanted = false;
+	x->trk_status = x->trk_d1 = x->trk_n = 0;
 	x->after_play = new std::vector<uint8_t>;
 
 	// [tx81z~ <rom> <nvram>]
@@ -870,6 +948,137 @@ static void tx81z_free(t_tx81z *x)
 	delete x->midi_out;
 	delete x->lcd0;
 	delete x->lcd1;
+}
+
+// ---- random voices -------------------------------------------------------------------
+// random <pluck|bass|lead|brass|pad|strings|total> [seed]: a new voice into the edit buffer.
+// Every category: algorithms, envelope and level ranges for carriers and modulators,
+// frequency ratios (coarse: 0 = 0.5, 4 = 1, 8 = 2, 10 = 3, 13 = 4, 16 = 5, 19 = 6, 22 = 7,
+// 25 = 8; checked against the firmware's display), LFO. Ranges are lo..hi of the data values.
+struct t_rng_env { int ar[2], d1r[2], d1l[2], d2r[2], rr[2], out[2]; };
+struct t_rng_cat {
+	const char *name;
+	std::vector<int> algs;
+	t_rng_env car, mod;
+	std::vector<int> car_crs, mod_crs, waves, dets;
+	int fb[2], kvs_car[2], kvs_mod[2];
+	int lfs[2], lfd[2], pmd[2], amd[2], pms[2], ams[2];
+	int mono_pct;   // chance of mono + portamento
+};
+
+static const t_rng_cat RNG_CATS[] = {
+	{ "pluck", {0, 1, 2, 3, 4},
+	  {{31, 31}, {7, 12}, {4, 10}, {3, 7}, {6, 9}, {95, 99}},
+	  {{31, 31}, {10, 18}, {0, 6}, {5, 10}, {6, 9}, {60, 82}},
+	  {4, 4, 4, 8}, {4, 8, 10, 13, 16, 19, 5, 9, 11}, {0, 0, 0, 4, 1}, {3, 3, 2, 4},
+	  {0, 6}, {1, 3}, {2, 5}, {30, 40}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, 0 },
+	{ "bass", {0, 1, 2, 3, 4},
+	  {{31, 31}, {6, 14}, {8, 13}, {2, 8}, {8, 11}, {97, 99}},
+	  {{28, 31}, {8, 16}, {4, 10}, {3, 8}, {8, 11}, {65, 85}},
+	  {0}, {0, 4, 4, 8}, {0, 0, 0, 4}, {3},
+	  {3, 7}, {1, 3}, {1, 4}, {30, 40}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, 30 },
+	{ "lead", {0, 1, 2, 3, 4},
+	  {{29, 31}, {3, 8}, {13, 15}, {0, 1}, {7, 10}, {97, 99}},
+	  {{26, 31}, {3, 10}, {9, 15}, {0, 3}, {7, 10}, {70, 90}},
+	  {4}, {4, 8, 10, 13, 4}, {0, 0, 4, 1, 2}, {3, 3, 2, 4},
+	  {4, 7}, {0, 2}, {1, 3}, {30, 40}, {30, 60}, {4, 12}, {0, 0}, {2, 4}, {0, 0}, 50 },
+	{ "brass", {0, 1, 2, 3},
+	  {{12, 15}, {4, 9}, {12, 14}, {0, 1}, {7, 9}, {97, 99}},
+	  {{11, 14}, {4, 10}, {9, 13}, {0, 2}, {7, 9}, {72, 88}},
+	  {4}, {4, 4, 8}, {0}, {3, 3, 2, 4},
+	  {5, 7}, {1, 3}, {2, 4}, {30, 35}, {40, 70}, {3, 8}, {0, 0}, {2, 3}, {0, 0}, 0 },
+	{ "pad", {4, 5, 6, 7},
+	  {{6, 14}, {2, 6}, {13, 15}, {0, 1}, {3, 6}, {92, 99}},
+	  {{6, 14}, {2, 8}, {8, 14}, {0, 2}, {3, 6}, {50, 75}},
+	  {4, 4, 8, 0}, {4, 8, 13}, {0, 0, 4, 1}, {1, 2, 4, 5},
+	  {0, 5}, {0, 2}, {0, 2}, {20, 30}, {0, 40}, {2, 6}, {0, 10}, {1, 3}, {0, 1}, 0 },
+	{ "strings", {4, 6},
+	  {{9, 15}, {3, 6}, {13, 15}, {0, 1}, {5, 7}, {93, 99}},
+	  {{10, 16}, {3, 6}, {11, 15}, {0, 1}, {5, 7}, {68, 80}},
+	  {4, 4, 8}, {4}, {0}, {2, 4, 1, 5},
+	  {5, 7}, {0, 2}, {1, 2}, {30, 36}, {40, 70}, {4, 8}, {0, 0}, {2, 3}, {0, 0}, 0 },
+};
+
+// carriers of the 8 algorithms (operator numbers 1-4)
+static bool is_carrier(int alg, int op)
+{
+	static const unsigned char CAR[8] = { 0x1, 0x1, 0x1, 0x1, 0x5, 0x7, 0x7, 0xF };   // bit k-1 = op k
+	return (CAR[alg & 7] >> (op - 1)) & 1;
+}
+
+static std::mt19937 &rng()
+{
+	static std::mt19937 g((unsigned)std::random_device{}() ^ (unsigned)time(nullptr));
+	return g;
+}
+
+static int rr2(const int r[2]) { return std::uniform_int_distribution<int>(r[0], r[1])(rng()); }
+static int rri(int lo, int hi) { return std::uniform_int_distribution<int>(lo, hi)(rng()); }
+static int pick(const std::vector<int> &v) { return v[size_t(rri(0, int(v.size()) - 1))]; }
+
+static void tx81z_random(t_tx81z *x, t_symbol *s, t_floatarg seed)
+{
+	const t_rng_cat *c = nullptr;
+	bool total = s == gensym("total") || s == gensym("random");
+	for (const auto &k : RNG_CATS) if (s == gensym(k.name)) c = &k;
+	if (!c && !total) { pd_error(x, "tx81z~: random pluck / bass / lead / brass / pad / strings / total"); return; }
+	if (seed != 0) rng().seed(unsigned(seed));
+	uint8_t vc[93], ac[23];
+	memset(ac, 0, sizeof ac);
+	// common part as in the factory voices
+	static const uint8_t COMMON[25] = { 0, 0, 35, 0, 0, 0, 0, 2, 0, 0, 12, 0, 2, 0, 0, 99, 1, 0, 0, 50, 0, 0, 0, 50, 0 };
+	memcpy(vc + 52, COMMON, 25);
+	static const uint8_t EXTRA[6] = { 99, 99, 99, 50, 50, 50 };
+	memcpy(vc + 87, EXTRA, 6);
+	int alg = total ? rri(0, 7) : pick(c->algs);
+	vc[52] = uint8_t(alg);
+	for (int op = 1; op <= 4; op++)
+	{
+		uint8_t *o = vc + (4 - op) * 13;
+		uint8_t *a = ac + (4 - op) * 5;
+		bool car = is_carrier(alg, op);
+		if (total)
+		{
+			o[0] = uint8_t(car ? rri(8, 31) : rri(0, 31)); o[1] = uint8_t(rri(0, 31)); o[2] = uint8_t(rri(0, 31));
+			o[3] = uint8_t(rri(3, 15)); o[4] = uint8_t(car ? rri(4, 15) : rri(0, 15));
+			o[5] = uint8_t(rri(0, 40)); o[6] = uint8_t(rri(0, 3)); o[7] = 0; o[8] = 0;
+			o[9] = uint8_t(rri(0, 7)); o[10] = uint8_t(car ? rri(85, 99) : rri(30, 99));
+			o[11] = uint8_t(car ? rri(0, 31) : rri(0, 63)); o[12] = uint8_t(rri(0, 6));
+			a[0] = uint8_t(rri(0, 9) == 0); a[1] = uint8_t(rri(0, 7)); a[2] = uint8_t(rri(0, 15));
+			a[3] = uint8_t(rri(0, 7)); a[4] = 0;
+			continue;
+		}
+		const t_rng_env &e = car ? c->car : c->mod;
+		o[0] = uint8_t(rr2(e.ar)); o[1] = uint8_t(rr2(e.d1r)); o[2] = uint8_t(rr2(e.d2r));
+		o[3] = uint8_t(rr2(e.rr)); o[4] = uint8_t(rr2(e.d1l));
+		o[5] = uint8_t(car ? 0 : rri(0, 25));                 // level scaling: modulators darker up high
+		o[6] = uint8_t(rri(0, 2));                            // rate scaling
+		o[7] = 0; o[8] = 0;
+		o[9] = uint8_t(car ? rr2(c->kvs_car) : rr2(c->kvs_mod));
+		o[10] = uint8_t(rr2(e.out));
+		o[11] = uint8_t(pick(car ? c->car_crs : c->mod_crs));
+		o[12] = uint8_t(pick(c->dets));
+		a[3] = uint8_t(pick(c->waves));
+	}
+	if (!total)
+	{
+		vc[53] = uint8_t(rr2(c->fb));
+		vc[54] = uint8_t(rr2(c->lfs)); vc[55] = uint8_t(rr2(c->lfd)); vc[56] = uint8_t(rr2(c->pmd));
+		vc[57] = uint8_t(rr2(c->amd)); vc[60] = uint8_t(rr2(c->pms)); vc[61] = uint8_t(rr2(c->ams));
+		if (vc[57] > 0) for (int op = 1; op <= 4; op++) if (is_carrier(alg, op)) vc[(4 - op) * 13 + 8] = 1;
+		if (rri(1, 100) <= c->mono_pct) { vc[63] = 1; vc[66] = uint8_t(rri(5, 25)); }
+	}
+	else
+	{
+		vc[53] = uint8_t(rri(0, 7)); vc[54] = uint8_t(rri(0, 99)); vc[55] = uint8_t(rri(0, 99));
+		vc[56] = uint8_t(rri(0, 30)); vc[57] = uint8_t(rri(0, 30)); vc[59] = uint8_t(rri(0, 3));
+		vc[60] = uint8_t(rri(0, 7)); vc[61] = uint8_t(rri(0, 3));
+	}
+	char name[16];
+	snprintf(name, sizeof name, "%-7.7s%03d", total ? "random" : c->name, rri(0, 999));
+	name[0] = char(toupper((unsigned char)name[0]));
+	for (int i = 0; i < 10; i++) vc[77 + i] = uint8_t(name[i]);
+	send_voice(x, vc, ac);
 }
 
 extern "C" {
@@ -907,6 +1116,7 @@ void tx81z_tilde_setup(void)
 	class_addmethod(tx81z_class, (t_method)tx81z_dumpreq, gensym("dumpreq"), A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_channel, gensym("channel"), A_FLOAT, A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_getvoice, gensym("getvoice"), A_NULL);
+	class_addmethod(tx81z_class, (t_method)tx81z_random, gensym("random"), A_SYMBOL, A_DEFFLOAT, A_NULL);
 	class_addmethod(tx81z_class, (t_method)tx81z_voicedata, gensym("voicedata"), A_GIMME, A_NULL);
 	class_addanything(tx81z_class, (t_method)tx81z_anything);
 }

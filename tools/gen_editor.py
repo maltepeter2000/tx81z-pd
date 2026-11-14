@@ -34,6 +34,7 @@ assert len(ALL) == len(set(ALL)) == len(T.PARAMS)
 
 CW, ROWH, X0 = 80, 88, 10
 NSLOTS = 64   # user bank slots
+RANDOM = ["pluck", "bass", "lead", "brass", "pad", "strings", "total"]
 BAND_Y = 44
 TOP = BAND_Y + 110
 X1 = X0 + 8 * CW + 30
@@ -92,23 +93,49 @@ def top_band(c):
     bng(c, X0 + 308, y + 44, "usave", "save patch")
     bng(c, X0 + 404, y + 44, "uload", "load bank")
     bng(c, X0 + 500, y + 44, "finit", "factory init")
-    c.add(f"#X text {X0} {y + 66} program change: bank + patch. MIDI ch: TX81Z receive channel (notes {COMMA} "
-          f"controller layer {COMMA} SysEx). user N: slot N of txuser-bank.txt (next to the editor). "
-          f"store to N + save patch: the voice into slot N {COMMA} the file is written. factory init: "
-          f"factory voices in bank I and factory setup (about 26 s)., f 104;")
+    c.add(f"#X text {X0} {y + 70} random;")
+    for k, cat in enumerate(RANDOM):
+        bng(c, X0 + 52 + k * 82, y + 70, f"rnd-{cat}", cat)
     x1 = X1
     c.add(f"#X obj {x1 - 4} {y} cnv 15 {8 * CW} 100 empty empty TX81Z{SP}LCD 4 8 0 10 #f4ece4 #404040 0;")
     c.add(f"#X symbolatom {x1} {y + 20} 20 0 0 0 - {D}0-lcd0 -;")
     c.add(f"#X symbolatom {x1} {y + 42} 20 0 0 0 - {D}0-lcd1 -;")
-    c.add(f"#X text {x1 + 200} {y + 20} the display of the emulated TX81Z. Changes from the editor go to the "
-          f"edit buffer: STORE on the TX81Z keeps them., f 60;")
+
+
+README = [
+    "tx81z~ editor",
+    "[txedit <bus>] sends to [s <bus>] (the [r <bus>] in front of tx81z~) and reads outlet 2 of tx81z~ "
+    "from [r <bus>-out]. In your own patch: [r tx1] -> [tx81z~ <rom> <nvram>] -> outlet 2 -> [s tx1-out] "
+    "and [txedit tx1]. Every change (controller, program change, messages, random) shows up here.",
+    "Rows of 8: rows 1-11 are the pages of the controller layer [txcc] (page k on the controller = row k), "
+    "the last two rows have no CC. Each cell: name and CC number, slider and number box: the value as from "
+    "a pot (0-127), the box right of it: the value as on the TX81Z.",
+    "bank + patch: program change I01-C32. In EDIT mode tx81z~ presses PLAY first (the firmware ignores "
+    "program changes while editing), then it reads the new voice for the editor.",
+    "MIDI ch: receive channel of the TX81Z, 0 = omni. Notes, the controller layer and SysEx follow it.",
+    "user N: load slot N of txuser-bank.txt (64 slots, next to txedit.pd). store to N chooses a slot, "
+    "save patch stores the current voice there and writes the file. load bank reads the file again.",
+    "factory init: factory voices in bank I and the factory setup of the TX81Z (about 26 s, DSP on). "
+    "It overwrites what you stored in bank I with STORE on the TX81Z, not txuser-bank.txt.",
+    "random: a new voice of that kind into the edit buffer - pluck (harp, piano, guitar: fast attack, "
+    "decaying), bass (ratio 0.5, short decay), lead (sustained, vibrato, sometimes mono with portamento), "
+    "brass (slower attack, 1:1 and 1:2 ratios, feedback), pad (slow attack, several carriers, detune, LFO), "
+    "strings (bowed attack, detuned carriers, delayed vibrato), total (anything that still sounds). "
+    "Keep a good one with store to + save patch.",
+    "All changes go to the edit buffer of the TX81Z. STORE on the TX81Z (press store) keeps a voice in bank I.",
+]
+
+
+def readme(c):
+    body = (" " + SEMI + " " + SEMI + " ").join(t.replace(",", " " + COMMA).replace(";", SEMI) for t in README)
+    c.lines.append("#N canvas 60 60 620 520 readme 0;")
+    c.lines.append(f"#X text 10 10 {body}, f 92;")
+    c.add(f"#X restore {X0} 12 pd readme;")
 
 
 def gui(c):
-    c.add(f"#X text {X0} 6 tx81z~ editor: rows of 8 as the pages of the controller (MIDI channel of [txcc]). Slider and number:"
-          f" the value as from a pot (0-127) {COMMA} the box right of it: the value as on the TX81Z., f 200;")
-    c.add(f"#X text {X0} 22 [txedit <bus>] sends to <bus> and reads outlet 3 of tx81z~ from <bus>-out: every change"
-          f" (controller {COMMA} program change {COMMA} messages) shows up here. Page k on the controller = row k., f 200;")
+    readme(c)
+    c.add(f"#X text {X0 + 90} 14 tx81z~ editor - open [pd readme] for how it works;")
     top_band(c)
     for x0, rows in ((X0, LEFT), (X1, RIGHT)):
         for r, (title, ns) in enumerate(rows):
@@ -199,6 +226,11 @@ def logic():
     mrd = c.add(f"#X msg 10 {yu + 30} read txuser-bank.txt;"); c.conn(lbu, 0, mrd, 0); c.conn(rld, 0, mrd, 0)
     c.conn(mrd, 0, td, 0)
     mwr = c.add(f"#X msg 200 {yu + 60} write txuser-bank.txt;"); c.conn(mwr, 0, td, 0)
+    # random voices
+    for k, cat in enumerate(RANDOM):
+        rr_ = c.add(f"#X obj {380 + k * 110} {yu + 400} r {D}0-rnd-{cat};")
+        mr_ = c.add(f"#X msg {380 + k * 110} {yu + 430} random {cat};"); c.conn(rr_, 0, mr_, 0)
+        sr_ = c.add(f"#X obj {380 + k * 110} {yu + 460} s {D}1;"); c.conn(mr_, 0, sr_, 0)
     # factory init of the TX81Z
     rfi = c.add(f"#X obj 200 {yu + 120} r {D}0-finit;")
     mfi = c.add(f"#X msg 200 {yu + 150} factoryinit;"); c.conn(rfi, 0, mfi, 0)

@@ -74,6 +74,11 @@ the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM f
   on its receive channel). Reported as `channel <n>` on outlet 2.
 - `getvoice` -> `voicedata <name> <93 VCED> <23 ACED>`; `voicedata ...` loads such
   a voice into the edit buffer (ACED + VCED bulk dump).
+- `random <pluck|bass|lead|brass|pad|strings|total> [seed]`: a new voice of that
+  kind into the edit buffer (category ranges for algorithm, envelopes, levels,
+  frequency ratios and LFO; checked by measuring attack, decay and level of each kind).
+- Dump requests wait until no key is down: the firmware stops taking notes when it
+  is asked for a dump while a key is held.
 - A program change in EDIT or UTILITY mode first presses PLAY (the firmware ignores
   program changes there). All 100 names are listed in
   the help patch and in `tools/tx81z_params.py`.

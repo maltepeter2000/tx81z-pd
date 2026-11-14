@@ -218,6 +218,8 @@ def build():
             "getvoice: outlet 2 gets voicedata <name> <93 VCED>",
             "  <23 ACED>, voicedata ...: that voice into the edit",
             "  buffer (bulk dump), as the editor's user bank does",
+            "random <kind> [seed]: a new voice into the edit buffer,",
+            "  kind: pluck bass lead brass pad strings total",
             "press <button>, button <button> 0/1: front panel",
             "rom <file>, nvram <file>, save, reset: firmware and",
             "  battery RAM (saved on save and when the patch closes)",
@@ -226,18 +228,12 @@ def build():
             "pcswitch 0/1/2, sysparam <p> <d>: system setup",
             "gain <f>: output gain (default 1)"]),
         ("Editor (txedit)", [
-            "[txedit " + bus.replace(BS, "") + "] above: click it to open the editor. All 100 voice "
-            "parameters in rows of 8: rows 1-11 are the CC pages of the controller layer, then two rows "
-            "without CC. Each cell: name and CC number, slider and number box 0-127 (n <name> <value>) "
-            "and the value as on the TX81Z. On top: voice name, program change (bank + patch), the LCD, "
-            "the MIDI channel (receive channel of the TX81Z, 0 = omni: notes, controller layer and SysEx "
-            "follow it) and the user bank: 64 slots in txuser-bank.txt next to the editor. user N loads "
-            "slot N, store to N chooses a slot and save patch saves the current voice there and writes the "
-            "file, load bank reads it again. factory init: factory voices in bank I and the factory setup. A program change in EDIT mode first presses PLAY (the firmware ignores "
-            "program changes while editing). To keep a voice in the TX81Z itself: STORE on the front panel.",
-            "It sends to the bus and reads outlet 2 from the -out bus: tx81z~ reports every change there "
-            "(info), so the controller, program changes and messages show up in it. In your own patch: "
-            "[txedit <name>] next to [r <name>] -> [tx81z~] -> outlet 2 -> [s <name>-out]."], True),
+            "[txedit " + bus.replace(BS, "") + "] above: click it to open the editor (how it works: "
+            "[pd readme] in the editor). All 100 voice parameters in rows of 8, rows 1-11 = the CC pages. "
+            "On top: voice name, program change, MIDI channel, user bank (txuser-bank.txt, store to + "
+            "save patch), factory init, random voices (pluck bass lead brass pad strings total), the LCD.",
+            "In your own patch: [r tx1] -> [tx81z~ <rom> <nvram>] -> outlet 2 -> [s tx1-out] and "
+            "[txedit tx1]."], True),
         ("MIDI CC: controller layer (txcc)", cc, True),
         ("Controls (example parameters)", [f"{n} ({d}): {t}" for n, d, t in CONTROLS], True),
         ("Voice parameters", param_lines()),
