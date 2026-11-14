@@ -24,11 +24,12 @@ import patchwriter as G                           # noqa: E402
 CTL_CH = 16
 NSLOTS = 64
 RANDOM = ["pluck", "bass", "lead", "brass", "pad", "strings", "total"]
-# control channel notes (Launchkey pads: bottom row from 36)
-N_RANDOM = 36          # 36-42: random pluck ... total
-N_STORE = 43           # store the current voice into the current user slot
-N_SAVE = 44            # save the battery RAM now
-N_FACTORY = 45         # factory init: press twice within 1 s
+# control channel notes: pad row 1 = 36-43, row 2 = 44-51
+PADS = [(36, "factory+"), (37, "user+")] + [(38 + k, c) for k, c in enumerate(RANDOM[:6])] + \
+       [(44, "total"), (45, "factory-"), (46, "user-"), (47, "store"), (48, "save"), (49, "finit")]
+PAD_TEXT = {"factory+": "next factory patch", "user+": "next user patch", "factory-": "previous factory patch",
+            "user-": "previous user patch", "store": "store the voice into the current user slot",
+            "save": "save the battery RAM", "finit": "twice within 1 s: factory init"}
 SAVE_EVERY_MS = 60000
 
 
@@ -73,6 +74,8 @@ def midi_sub():
     psl = p.add("s tx-ctl-pgm", 400, 290); p.con(prt, 0, psl, 0)
     pm = p.msg("pgm $2 $1", 490, 260); p.con(prt, 1, pm, 0)
     s3 = p.add("s tx", 490, 290); p.con(pm, 0, s3, 0)
+    cur = p.msg("$2", 560, 260); p.con(prt, 1, cur, 0)
+    sc2 = p.add("s tx-cur-pgm", 560, 290); p.con(cur, 0, sc2, 0)   # for the factory+ / - pads
     # CC to the firmware: 1-19 without 3, 64-69 (the rest is the controller layer)
     ci = p.add("ctlin", 600, 60)
     cc = fold(p, ci, 2, 680, 85)
@@ -96,20 +99,34 @@ def midi_sub():
 
 def control_sub():
     p = G.P("control", 1000, 700)
-    p.note(f"Control channel {CTL_CH}: notes {N_RANDOM}-{N_RANDOM + 6} random "
-           + " ".join(RANDOM) + f", {N_STORE} store the voice into the current user slot, "
-           f"{N_SAVE} save the battery RAM, {N_FACTORY} twice within 1 s = factory init. "
-           f"Program change 1-{NSLOTS} on channel {CTL_CH}: user slot 0-{NSLOTS - 1} "
-           "(txuser-bank.txt in the project folder).", 10, 10)
+    p.note(f"Control channel {CTL_CH}: " + ", ".join(
+        f"{n} {PAD_TEXT.get(a, 'random ' + a)}" for n, a in PADS) +
+        f". Program change 1-{NSLOTS} on channel {CTL_CH}: user slot 0-{NSLOTS - 1} "
+        "(txuser-bank.txt in the project folder).", 10, 10)
     rn = p.add("r tx-ctl-note", 10, 70)
     un = p.add("unpack f f", 10, 100); p.con(rn, 0, un, 0)
     gt = p.add("> 0", 90, 130); p.con(un, 1, gt, 0)
     sp = p.add("spigot", 10, 160); p.con(un, 0, sp, 0); p.con(gt, 0, sp, 1)
-    sel = p.add("sel " + " ".join(str(N_RANDOM + k) for k in range(7)) + f" {N_STORE} {N_SAVE} {N_FACTORY}", 10, 190)
+    sel = p.add("sel " + " ".join(str(n) for n, _ in PADS), 10, 190)
     p.con(sp, 0, sel, 0)
+    out = {a: k for k, (_, a) in enumerate(PADS)}
     stx = p.add("s tx", 10, 300)
     for k, cat in enumerate(RANDOM):
-        m = p.msg(f"random {cat}", 10 + k * 95, 240); p.con(sel, k, m, 0); p.con(m, 0, stx, 0)
+        m = p.msg(f"random {cat}", 10 + k * 95, 240); p.con(sel, out[cat], m, 0); p.con(m, 0, stx, 0)
+    # factory patch + / -: program I01-C32 (0-127), also follows program changes from MIDI
+    fp = p.msg("1", 300, 130); fm_ = p.msg("127", 340, 130)
+    p.con(sel, out["factory+"], fp, 0); p.con(sel, out["factory-"], fm_, 0)
+    add = p.add("+", 300, 160); p.con(fp, 0, add, 0); p.con(fm_, 0, add, 0)
+    md = p.add("mod 128", 300, 185); p.con(add, 0, md, 0)
+    tff = p.add("t f f", 300, 210); p.con(md, 0, tff, 0); p.con(tff, 1, add, 1)
+    rcp = p.add("r tx-cur-pgm", 420, 130); p.con(rcp, 0, add, 1)
+    pgm = p.msg("pgm $1", 300, 270); p.con(tff, 0, pgm, 0); p.con(pgm, 0, stx, 0)
+    # user patch + / -: slot 0-63, through the recall below
+    up_ = p.msg("1", 520, 130); um_ = p.msg(str(NSLOTS - 1), 560, 130)
+    p.con(sel, out["user+"], up_, 0); p.con(sel, out["user-"], um_, 0)
+    uad = p.add("+", 520, 160); p.con(up_, 0, uad, 0); p.con(um_, 0, uad, 0)
+    umd = p.add(f"mod {NSLOTS}", 520, 185); p.con(uad, 0, umd, 0)
+    usp = p.add("s tx-ctl-pgm", 520, 210); p.con(umd, 0, usp, 0)
     # user bank
     td = p.add("text define -k tx-bank", 600, 640)
     lb = p.add("loadbang", 600, 520)
@@ -119,18 +136,19 @@ def control_sub():
     # recall: program change on the control channel
     rp = p.add("r tx-ctl-pgm", 10, 360)
     cl = p.add(f"clip 0 {NSLOTS - 1}", 10, 390); p.con(rp, 0, cl, 0)
-    tf = p.add("t f f", 10, 420); p.con(cl, 0, tf, 0)
+    tf = p.add("t f f", 10, 420); p.con(cl, 0, tf, 0); p.con(tf, 1, uad, 1)
     slot = p.add("f", 150, 470); p.con(tf, 1, slot, 1)
     tg = p.add("text get tx-bank", 10, 450); p.con(tf, 0, tg, 0)
     lt = p.add("list trim", 10, 480); p.con(tg, 0, lt, 0)
     rdash = p.add("route -", 10, 510); p.con(lt, 0, rdash, 0)
-    emp = p.msg("empty slot", 10, 540); p.con(rdash, 0, emp, 0)
+    fe = p.add("f", 10, 540); p.con(rdash, 0, fe, 0); p.con(tf, 1, fe, 1)
+    emp = p.msg("user $1 empty", 10, 570); p.con(fe, 0, emp, 0)
     lp = p.add("list prepend voicedata", 80, 540); p.con(rdash, 1, lp, 0)
     lt2 = p.add("list trim", 80, 570); p.con(lp, 0, lt2, 0)
     s2 = p.add("s tx", 80, 600); p.con(lt2, 0, s2, 0)
-    o1 = p.add("s tx-oled-note", 10, 600); p.con(emp, 0, o1, 0)
+    o1 = p.add("s tx-oled-note", 10, 630); p.con(emp, 0, o1, 0)
     # store: getvoice, voicedata into the slot, write the file
-    tb = p.add("t b b", 300, 360); p.con(sel, 7, tb, 0)
+    tb = p.add("t b b", 300, 360); p.con(sel, out["store"], tb, 0)
     one = p.msg("1", 360, 390); p.con(tb, 1, one, 0)
     gv = p.msg("getvoice", 300, 420); p.con(tb, 0, gv, 0); p.con(gv, 0, stx, 0)
     ro = p.add("r tx-out", 450, 360)
@@ -146,14 +164,14 @@ def control_sub():
     sm = p.msg("stored slot $1", 860, 510); p.con(fs, 0, sm, 0)
     o2 = p.add("s tx-oled-note", 860, 540); p.con(sm, 0, o2, 0)
     # save the battery RAM: now, and every minute
-    sv = p.msg("save", 300, 480); p.con(sel, 8, sv, 0); p.con(sv, 0, stx, 0)
-    svm = p.msg("battery RAM saved", 300, 540); p.con(sel, 8, svm, 0)
+    sv = p.msg("save", 300, 480); p.con(sel, out["save"], sv, 0); p.con(sv, 0, stx, 0)
+    svm = p.msg("battery RAM saved", 300, 540); p.con(sel, out["save"], svm, 0)
     o3 = p.add("s tx-oled-note", 300, 570); p.con(svm, 0, o3, 0)
     lb2 = p.add("loadbang", 200, 640)
     dl = p.add(f"del {SAVE_EVERY_MS}", 200, 670); p.con(lb2, 0, dl, 0)
     p.con(dl, 0, sv, 0); p.con(dl, 0, dl, 0)                     # every minute, not at load
     # factory init: twice within 1 s
-    tf2 = p.add("t b b", 700, 240); p.con(sel, 9, tf2, 0)
+    tf2 = p.add("t b b", 700, 240); p.con(sel, out["finit"], tf2, 0)
     tm = p.add("timer", 700, 300); p.con(tf2, 1, tm, 1); p.con(tf2, 0, tm, 0)
     lt3 = p.add("< 1000", 700, 330); p.con(tm, 0, lt3, 0)
     s01 = p.add("sel 1 0", 700, 360); p.con(lt3, 0, s01, 0)
@@ -171,29 +189,38 @@ def oled_sub():
            "TX81Z's voice line (C15 LatelyBass), a turned parameter shows out1 = 67, the control "
            "channel shows what it did (stored slot 5). At most every 50 ms.", 10, 10)
     ro = p.add("r tx-out", 10, 60)
-    rl = p.add("route lcd info voice", 10, 90); p.con(ro, 0, rl, 0)
+    rl = p.add("route lcd info voice status", 10, 90); p.con(ro, 0, rl, 0)
     # LCD line 2 (the voice line in PLAY mode) kept for patch changes
     l1 = p.add("list", 10, 120); p.con(rl, 0, l1, 0)
     up = p.add("unpack s s", 10, 150); p.con(l1, 0, up, 0)
     sy2 = p.add("symbol", 10, 210); p.con(up, 1, sy2, 1)
     # voice change: after 150 ms (the firmware has drawn it) show the voice line; the values of
     # the voice dump stay off the display for 500 ms
-    tv = p.add("t b b b", 300, 120); p.con(rl, 2, tv, 0)
+    tv = p.add("t b", 300, 120); p.con(rl, 2, tv, 0)
     dv = p.add("del 150", 300, 150); p.con(tv, 0, dv, 0); p.con(dv, 0, sy2, 0)
-    gi = p.add("spigot 1", 150, 180); p.con(rl, 1, gi, 0)
-    z0 = p.msg("0", 420, 150); p.con(tv, 2, z0, 0); p.con(z0, 0, gi, 1)
-    dg = p.add("del 500", 480, 150); p.con(tv, 1, dg, 0)
-    o1 = p.msg("1", 480, 180); p.con(dg, 0, o1, 0); p.con(o1, 0, gi, 1)
-    li = p.add("list", 150, 210); p.con(gi, 0, li, 0)
-    nv = p.msg("$1 = $3", 150, 240); p.con(li, 0, nv, 0)
-    rn = p.add("r tx-oled-note", 300, 210)
-    ff = p.add("fudiformat -u", 150, 270); p.con(nv, 0, ff, 0); p.con(rn, 0, ff, 0)
-    ts = p.add("list tosymbol", 150, 300); p.con(ff, 0, ts, 0)
+    # a parameter shows only when it was turned (n <name> ... on the bus), not from voice dumps
+    rb = p.add("r tx", 600, 180)
+    rnn = p.add("route n", 600, 210); p.con(rb, 0, rnn, 0)
+    lnn = p.add("list", 600, 240); p.con(rnn, 0, lnn, 0)
+    unn = p.add("unpack s f", 600, 270); p.con(lnn, 0, unn, 0)
+    li = p.add("list", 150, 180); p.con(rl, 1, li, 0)
+    tll = p.add("t l l", 150, 210); p.con(li, 0, tll, 0)
+    nv = p.msg("$1 = $3", 250, 240); p.con(tll, 1, nv, 0)
+    ff1 = p.add("fudiformat -u", 250, 270); p.con(nv, 0, ff1, 0)
+    ts1 = p.add("list tosymbol", 250, 300); p.con(ff1, 0, ts1, 0)
+    cand = p.add("symbol", 250, 330); p.con(ts1, 0, cand, 1)
+    uin = p.add("unpack s f s", 150, 240); p.con(tll, 0, uin, 0)
+    wsel = p.add("sel -", 150, 300); p.con(uin, 0, wsel, 0); p.con(unn, 0, wsel, 1)
+    p.con(wsel, 0, cand, 0)
+    rn = p.add("r tx-oled-note", 420, 240)
+    ff = p.add("fudiformat -u", 420, 270); p.con(rn, 0, ff, 0)
+    ts = p.add("list tosymbol", 420, 300); p.con(ff, 0, ts, 0)
+    st = p.add("symbol", 700, 120); p.con(rl, 3, st, 0)
     line = p.add("symbol", 10, 360)
-    p.con(ts, 0, line, 1); p.con(sy2, 0, line, 1)
+    p.con(ts, 0, line, 1); p.con(sy2, 0, line, 1); p.con(st, 0, line, 1); p.con(cand, 0, line, 1)
     # dirty flag + metro
     one = p.msg("1", 450, 300)
-    p.con(ts, 0, one, 0); p.con(sy2, 0, one, 0)
+    p.con(ts, 0, one, 0); p.con(sy2, 0, one, 0); p.con(st, 0, one, 0); p.con(cand, 0, one, 0)
     lb = p.add("loadbang", 450, 60)
     mt = p.add("metro 50", 450, 90); p.con(lb, 0, mt, 0)
     gate = p.add("spigot", 450, 330); p.con(mt, 0, gate, 0); p.con(one, 0, gate, 1)

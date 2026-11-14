@@ -47,6 +47,10 @@
 
 #include "m_pd.h"
 #include "tx81z.h"
+#ifndef _WIN32
+#include <dirent.h>
+#include <strings.h>
+#endif
 
 #include <cmath>
 #include <cstdio>
@@ -104,6 +108,8 @@ struct t_tx81z
 	bool voice_waiting;      // a whole voice waits for its turn
 	uint8_t voice_v[93], voice_a[23];
 	int rx_reported;         // receive channel last reported (channel outlet)
+	t_clock *stat_clock;     // status messages go out a moment later (also from the constructor)
+	std::string *stat_text;
 	uint8_t held[16][128];   // keys down (from the MIDI going in)
 	int nheld;
 	bool req_wanted;         // a dump request waits until no key is down
@@ -129,6 +135,42 @@ static std::string resolve(t_tx81z *x, t_symbol *s)
 	if (!p.empty() && p[0] != '/' && p[0] != '~' && !(p.size() > 1 && p[1] == ':'))
 		p = std::string(x->dir->s_name) + "/" + p;
 	return p;
+}
+
+// the same file with another upper / lower case (TX81Z-v1.6.bin for tx81z-v1.6.bin), else p
+static std::string find_nocase(const std::string &p)
+{
+#ifndef _WIN32
+	FILE *f = fopen(p.c_str(), "rb");
+	if (f) { fclose(f); return p; }
+	size_t sl = p.rfind('/');
+	std::string dir = sl == std::string::npos ? "." : p.substr(0, sl);
+	std::string name = sl == std::string::npos ? p : p.substr(sl + 1);
+	DIR *d = opendir(dir.c_str());
+	if (!d) return p;
+	std::string found = p;
+	while (struct dirent *e = readdir(d))
+		if (strcasecmp(e->d_name, name.c_str()) == 0) { found = dir + "/" + e->d_name; break; }
+	closedir(d);
+	return found;
+#else
+	return p;
+#endif
+}
+
+// status <text> on outlet 2 (for a display); sent from a clock, so a status from the
+// constructor (no firmware, factory init) arrives once the patch is connected
+static void stat_tick(t_tx81z *x)
+{
+	t_atom a;
+	SETSYMBOL(&a, gensym(x->stat_text->c_str()));
+	outlet_anything(x->out_msg, gensym("status"), 1, &a);
+}
+
+static void status(t_tx81z *x, const char *text)
+{
+	*x->stat_text = text;
+	clock_delay(x->stat_clock, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -447,9 +489,11 @@ static void tx81z_reset(t_tx81z *x)
 static void tx81z_rom(t_tx81z *x, t_symbol *s)
 {
 	std::string err;
-	if (!x->synth->load_rom(resolve(x, s), err))
+	if (!x->synth->load_rom(find_nocase(resolve(x, s)), err))
 	{
 		pd_error(x, "tx81z~: %s", err.c_str());
+		std::string st = std::string("no firmware: ") + s->s_name;
+		status(x, st.c_str());
 		return;
 	}
 	x->rom_loaded = true;
@@ -885,6 +929,7 @@ static void tx81z_init_tick(t_tx81z *x)
 		dump_request(x);
 		if (!x->nvram_path->empty()) x->synth->save_nvram(*x->nvram_path);
 		post("tx81z~: factory init done (presets, MIDI omni, program change, control change, pitch bend and SysEx on, battery RAM saved)");
+		status(x, "factory init done");
 		break;
 	default:
 		x->init_stage = 0;
@@ -896,6 +941,7 @@ static void tx81z_factoryinit(t_tx81z *x)
 {
 	if (!x->rom_loaded) { pd_error(x, "tx81z~: load a ROM first"); return; }
 	post("tx81z~: factory init (about 26 s, needs DSP on) ...");
+	status(x, "factory init ...");
 	tx81z_release(x);
 	for (int b = 0; b < TX81Z::BTN_COUNT; b++) x->synth->set_button(TX81Z::Button(b), false);
 	x->synth->set_button(TX81Z::BTN_VOL_LEFT, true);
@@ -933,6 +979,8 @@ static void *tx81z_new(t_symbol *, int argc, t_atom *argv)
 	outlet_new(&x->x_obj, &s_signal);
 	outlet_new(&x->x_obj, &s_signal);
 	x->out_msg = outlet_new(&x->x_obj, 0);
+	x->stat_clock = clock_new(x, (t_method)stat_tick);
+	x->stat_text = new std::string();
 	x->clock = clock_new(x, (t_method)tx81z_tick);
 	x->release_clock = clock_new(x, (t_method)tx81z_release);
 	x->init_clock = clock_new(x, (t_method)tx81z_init_tick);
@@ -982,6 +1030,8 @@ static void tx81z_free(t_tx81z *x)
 	clock_free(x->rep_clock);
 	clock_free(x->req_clock);
 	clock_free(x->play_clock);
+	clock_free(x->stat_clock);
+	delete x->stat_text;
 	delete x->after_play;
 	delete x->sx;
 	delete x->synth;
