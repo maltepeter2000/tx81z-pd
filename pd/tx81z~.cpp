@@ -100,6 +100,9 @@ struct t_tx81z
 	int shadow[2][128];      // current data value per VCED / ACED number, -1 = unknown
 	int pend[2][128];        // value waiting to be sent, -1 = none
 	int pend_next;           // round robin position
+	double send_wait;        // Pd samples until the firmware takes the next change (it needs ~35 ms each)
+	bool voice_waiting;      // a whole voice waits for its turn
+	uint8_t voice_v[93], voice_a[23];
 	int rx_reported;         // receive channel last reported (channel outlet)
 	uint8_t held[16][128];   // keys down (from the MIDI going in)
 	int nheld;
@@ -226,9 +229,24 @@ static uint8_t rxch(t_tx81z *x)
 }
 
 // one waiting parameter change into the emulated MIDI input, only when it is idle
+// The firmware redraws its display after every parameter change and takes about 35 ms for it
+// (measured with v1.6: one change every 30 ms or faster ends in "Midi Buffer Full", as on the
+// real TX81Z). So one change per 45 ms of emulated time, and 200 ms after a whole voice.
+static const double PARAM_GAP_MS = 45, VOICE_GAP_MS = 200;
+
+static double ms_samples(double ms) { return ms * 0.001 * (sys_getsr() > 0 ? sys_getsr() : 44100); }
+
+static void send_voice_now(t_tx81z *x, const uint8_t *vc, const uint8_t *ac);
+
 static void send_pending(t_tx81z *x)
 {
-	if (x->init_stage || x->synth->midi_in_pending() > 0) return;
+	if (x->init_stage || x->send_wait > 0 || x->synth->midi_in_pending() > 0) return;
+	if (x->voice_waiting)
+	{
+		x->voice_waiting = false;
+		send_voice_now(x, x->voice_v, x->voice_a);
+		return;
+	}
 	const int total = GROUP_SIZE[G_V] + GROUP_SIZE[G_A];
 	for (int k = 0; k < total; k++)
 	{
@@ -240,6 +258,7 @@ static void send_pending(t_tx81z *x)
 		x->pend[g][num] = -1;
 		x->sent_at[g][num] = clock_getlogicaltime();
 		x->pend_next = (i + 1) % total;
+		x->send_wait = ms_samples(PARAM_GAP_MS);
 		return;
 	}
 }
@@ -248,6 +267,7 @@ static void dump_request(t_tx81z *x)
 {
 	const uint8_t req[] = { 0xF0, 0x43, uint8_t(0x20 | rxch(x)), 0x7E, 'L', 'M', ' ', ' ', '8', '9', '7', '6', 'A', 'E', 0xF7 };
 	x->synth->midi_in(req, sizeof req);
+	if (x->send_wait < ms_samples(100)) x->send_wait = ms_samples(100);   // the firmware sends its dump
 }
 
 // SysEx from the firmware's MIDI Out: ACED / VCED dumps and parameter changes
@@ -360,6 +380,7 @@ static t_int *tx81z_perform(t_int *w)
 		return w + 5;
 	}
 
+	if (x->send_wait > 0) x->send_wait -= n;
 	send_pending(x);
 	if (x->init_stage && x->init_wait > 0)
 	{
@@ -638,10 +659,27 @@ static void tx81z_voicedata(t_tx81z *x, t_symbol *, int argc, t_atom *argv)
 	send_voice(x, vc, ac);
 }
 
-// a whole voice into the firmware's edit buffer: ACED + VCED bulk dump
+// a whole voice into the firmware's edit buffer: ACED + VCED bulk dump. If the firmware is still
+// busy, the voice waits (only the newest one) and goes out from send_pending.
 static void send_voice(t_tx81z *x, const uint8_t *vc, const uint8_t *ac)
 {
 	if (x->init_stage) return;
+	for (int g = 0; g < 2; g++) for (int i = 0; i < 128; i++) x->pend[g][i] = -1;   // the voice replaces them
+	if (x->send_wait > 0 || x->synth->midi_in_pending() > 0)
+	{
+		memcpy(x->voice_v, vc, 93); memcpy(x->voice_a, ac, 23);
+		x->voice_waiting = true;
+		for (int i = 0; i < 93; i++) x->shadow[G_V][i] = vc[i];
+		for (int i = 0; i < 23; i++) x->shadow[G_A][i] = ac[i];
+		clock_delay(x->rep_clock, 0);
+		emit_voice_name(x, vc + 77);
+		return;
+	}
+	send_voice_now(x, vc, ac);
+}
+
+static void send_voice_now(t_tx81z *x, const uint8_t *vc, const uint8_t *ac)
+{
 	uint8_t ch = rxch(x);
 	std::vector<uint8_t> a = { 0xF0, 0x43, ch, 0x7E, 0x00, 0x21, 'L', 'M', ' ', ' ', '8', '9', '7', '6', 'A', 'E' };
 	int sum = 0;
@@ -657,6 +695,7 @@ static void send_voice(t_tx81z *x, const uint8_t *vc, const uint8_t *ac)
 	x->synth->midi_in(v.data(), v.size());
 	for (int i = 0; i < 93; i++) x->shadow[G_V][i] = v[6 + i];
 	for (int i = 0; i < 23; i++) x->shadow[G_A][i] = a[16 + i];
+	x->send_wait = ms_samples(VOICE_GAP_MS);
 	clock_delay(x->rep_clock, 0);
 	emit_voice_name(x, vc + 77);
 }
@@ -911,6 +950,8 @@ static void *tx81z_new(t_symbol *, int argc, t_atom *argv)
 	x->play_clock = clock_new(x, (t_method)play_tick_entry);
 	x->play_stage = 0;
 	x->rx_reported = -1;
+	x->send_wait = 0;
+	x->voice_waiting = false;
 	memset(x->held, 0, sizeof x->held);
 	x->nheld = 0;
 	x->req_wanted = false;

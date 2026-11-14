@@ -77,6 +77,10 @@ the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM f
 - `random <pluck|bass|lead|brass|pad|strings|total> [seed]`: a new voice of that
   kind into the edit buffer (category ranges for algorithm, envelopes, levels,
   frequency ratios and LFO; checked by measuring attack, decay and level of each kind).
+- The firmware needs about 35 ms per parameter change (it redraws its display);
+  faster changes end in "Midi Buffer Full", as on the real TX81Z. `tx81z~` sends one
+  change per 45 ms (the newest value of each parameter) and a whole voice with a
+  200 ms gap.
 - Dump requests wait until no key is down: the firmware stops taking notes when it
   is asked for a dump while a key is held.
 - A program change in EDIT or UTILITY mode first presses PLAY (the firmware ignores
