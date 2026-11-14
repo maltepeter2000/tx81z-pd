@@ -232,8 +232,8 @@ def build():
             "and the value as on the TX81Z. On top: voice name, program change (bank + patch), the LCD, "
             "the MIDI channel (receive channel of the TX81Z, 0 = omni: notes, controller layer and SysEx "
             "follow it) and the user bank: 64 slots in txuser-bank.txt next to the editor. user N loads "
-            "slot N, store to N saves the current voice in slot N and writes the file, save / load bank "
-            "write and read it. A program change in EDIT mode first presses PLAY (the firmware ignores "
+            "slot N, store to N chooses a slot and save patch saves the current voice there and writes the "
+            "file, load bank reads it again. factory init: factory voices in bank I and the factory setup. A program change in EDIT mode first presses PLAY (the firmware ignores "
             "program changes while editing). To keep a voice in the TX81Z itself: STORE on the front panel.",
             "It sends to the bus and reads outlet 2 from the -out bus: tx81z~ reports every change there "
             "(info), so the controller, program changes and messages show up in it. In your own patch: "

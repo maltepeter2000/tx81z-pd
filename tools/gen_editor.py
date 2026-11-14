@@ -88,12 +88,14 @@ def top_band(c):
     c.add(f"#X text {X0 + 150} {y + 44} user;")
     c.add(f"#X floatatom {X0 + 184} {y + 44} 3 0 63 0 - - {D}0-urecall;")
     c.add(f"#X text {X0 + 218} {y + 44} store to;")
-    c.add(f"#X floatatom {X0 + 274} {y + 44} 3 0 63 0 - - {D}0-ustore;")
-    bng(c, X0 + 314, y + 44, "usave", "save bank")
-    bng(c, X0 + 414, y + 44, "uload", "load bank")
+    c.add(f"#X floatatom {X0 + 274} {y + 44} 3 0 63 0 - - {D}0-uslot;")
+    bng(c, X0 + 308, y + 44, "usave", "save patch")
+    bng(c, X0 + 404, y + 44, "uload", "load bank")
+    bng(c, X0 + 500, y + 44, "finit", "factory init")
     c.add(f"#X text {X0} {y + 66} program change: bank + patch. MIDI ch: TX81Z receive channel (notes {COMMA} "
-          f"controller layer {COMMA} SysEx). user N: slot N of txuser-bank.txt (next to the editor) {COMMA} "
-          f"store to N saves the voice there and writes the file., f 104;")
+          f"controller layer {COMMA} SysEx). user N: slot N of txuser-bank.txt (next to the editor). "
+          f"store to N + save patch: the voice into slot N {COMMA} the file is written. factory init: "
+          f"factory voices in bank I and factory setup (about 26 s)., f 104;")
     x1 = X1
     c.add(f"#X obj {x1 - 4} {y} cnv 15 {8 * CW} 100 empty empty TX81Z{SP}LCD 4 8 0 10 #f4ece4 #404040 0;")
     c.add(f"#X symbolatom {x1} {y + 20} 20 0 0 0 - {D}0-lcd0 -;")
@@ -196,8 +198,11 @@ def logic():
     rld = c.add(f"#X obj 100 {yu} r {D}0-uload;")
     mrd = c.add(f"#X msg 10 {yu + 30} read txuser-bank.txt;"); c.conn(lbu, 0, mrd, 0); c.conn(rld, 0, mrd, 0)
     c.conn(mrd, 0, td, 0)
-    rsv = c.add(f"#X obj 200 {yu} r {D}0-usave;")
-    mwr = c.add(f"#X msg 200 {yu + 60} write txuser-bank.txt;"); c.conn(rsv, 0, mwr, 0); c.conn(mwr, 0, td, 0)
+    mwr = c.add(f"#X msg 200 {yu + 60} write txuser-bank.txt;"); c.conn(mwr, 0, td, 0)
+    # factory init of the TX81Z
+    rfi = c.add(f"#X obj 200 {yu + 120} r {D}0-finit;")
+    mfi = c.add(f"#X msg 200 {yu + 150} factoryinit;"); c.conn(rfi, 0, mfi, 0)
+    sfi = c.add(f"#X obj 200 {yu + 180} s {D}1;"); c.conn(mfi, 0, sfi, 0)
     # recall: slot -> text get -> voicedata ... -> tx81z~
     rrc = c.add(f"#X obj 400 {yu} r {D}0-urecall;")
     tgu = c.add(f"#X obj 400 {yu + 30} text get {D}0-ubank;"); c.conn(rrc, 0, tgu, 0)
@@ -206,9 +211,12 @@ def logic():
     lpv = c.add(f"#X obj 450 {yu + 120} list prepend voicedata;"); c.conn(rdu, 1, lpv, 0)
     lt2 = c.add(f"#X obj 450 {yu + 150} list trim;"); c.conn(lpv, 0, lt2, 0)
     su = c.add(f"#X obj 450 {yu + 180} s {D}1;"); c.conn(lt2, 0, su, 0)
-    # store to N: getvoice, the answer voicedata ... into line N, then write the file
-    rst = c.add(f"#X obj 650 {yu} r {D}0-ustore;")
-    tst = c.add(f"#X obj 650 {yu + 30} t b b f;"); c.conn(rst, 0, tst, 0)
+    # store to N (only the slot) + save patch: getvoice, the answer voicedata ... into line N,
+    # then write the file
+    rsl = c.add(f"#X obj 750 {yu - 60} r {D}0-uslot;")
+    rsv = c.add(f"#X obj 650 {yu - 60} r {D}0-usave;")
+    fsl = c.add(f"#X obj 650 {yu - 30} f;"); c.conn(rsv, 0, fsl, 0); c.conn(rsl, 0, fsl, 1)
+    tst = c.add(f"#X obj 650 {yu + 30} t b b f;"); c.conn(fsl, 0, tst, 0)
     one = c.add(f"#X msg 700 {yu + 60} 1;"); c.conn(tst, 1, one, 0)
     mgv = c.add(f"#X msg 650 {yu + 90} getvoice;"); c.conn(tst, 0, mgv, 0)
     sgv = c.add(f"#X obj 650 {yu + 120} s {D}1;"); c.conn(mgv, 0, sgv, 0)
