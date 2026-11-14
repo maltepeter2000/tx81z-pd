@@ -167,49 +167,46 @@ def control_sub():
 
 def oled_sub():
     p = G.P("oled", 900, 520)
-    p.note("OLED via O2O (127.0.0.1:7562): line 1-2 = the TX81Z display, line 3 = the last changed "
-           "parameter (info) or a note from pd control. At most every 50 ms.", 10, 10)
+    p.note("OLED via O2O (127.0.0.1:7562), one line: the last event - a patch change shows the "
+           "TX81Z's voice line (C15 LatelyBass), a turned parameter shows out1 = 67, the control "
+           "channel shows what it did (stored slot 5). At most every 50 ms.", 10, 10)
     ro = p.add("r tx-out", 10, 60)
     rl = p.add("route lcd info voice", 10, 90); p.con(ro, 0, rl, 0)
+    # LCD line 2 (the voice line in PLAY mode) kept for patch changes
     l1 = p.add("list", 10, 120); p.con(rl, 0, l1, 0)
-    lcd = p.add("list", 10, 300)
-    p.con(l1, 0, lcd, 1)
-    # after a voice change the dump reports many values: keep them off the OLED for 500 ms
-    gi = p.add("spigot 1", 150, 120); p.con(rl, 1, gi, 0)
-    tv = p.add("t b b", 650, 90); p.con(rl, 2, tv, 0)
-    z0 = p.msg("0", 650, 120); p.con(tv, 1, z0, 0); p.con(z0, 0, gi, 1)
-    dv = p.add("del 500", 720, 120); p.con(tv, 0, dv, 0)
-    o1 = p.msg("1", 720, 150); p.con(dv, 0, o1, 0); p.con(o1, 0, gi, 1)
-    li = p.add("list", 150, 150); p.con(gi, 0, li, 0)
-    nv = p.msg("$1 = $3", 150, 175); p.con(li, 0, nv, 0)
-    rn = p.add("r tx-oled-note", 300, 90)
-    ff = p.add("fudiformat -u", 150, 180); p.con(nv, 0, ff, 0); p.con(rn, 0, ff, 0)
-    ts = p.add("list tosymbol", 150, 210); p.con(ff, 0, ts, 0)
-    line3 = p.add("list", 150, 330)
-    p.con(ts, 0, line3, 1)
+    up = p.add("unpack s s", 10, 150); p.con(l1, 0, up, 0)
+    sy2 = p.add("symbol", 10, 210); p.con(up, 1, sy2, 1)
+    # voice change: after 150 ms (the firmware has drawn it) show the voice line; the values of
+    # the voice dump stay off the display for 500 ms
+    tv = p.add("t b b b", 300, 120); p.con(rl, 2, tv, 0)
+    dv = p.add("del 150", 300, 150); p.con(tv, 0, dv, 0); p.con(dv, 0, sy2, 0)
+    gi = p.add("spigot 1", 150, 180); p.con(rl, 1, gi, 0)
+    z0 = p.msg("0", 420, 150); p.con(tv, 2, z0, 0); p.con(z0, 0, gi, 1)
+    dg = p.add("del 500", 480, 150); p.con(tv, 1, dg, 0)
+    o1 = p.msg("1", 480, 180); p.con(dg, 0, o1, 0); p.con(o1, 0, gi, 1)
+    li = p.add("list", 150, 210); p.con(gi, 0, li, 0)
+    nv = p.msg("$1 = $3", 150, 240); p.con(li, 0, nv, 0)
+    rn = p.add("r tx-oled-note", 300, 210)
+    ff = p.add("fudiformat -u", 150, 270); p.con(nv, 0, ff, 0); p.con(rn, 0, ff, 0)
+    ts = p.add("list tosymbol", 150, 300); p.con(ff, 0, ts, 0)
+    line = p.add("symbol", 10, 360)
+    p.con(ts, 0, line, 1); p.con(sy2, 0, line, 1)
     # dirty flag + metro
-    one = p.msg("1", 450, 150)
-    p.con(l1, 0, one, 0); p.con(nv, 0, one, 0); p.con(rn, 0, one, 0)
+    one = p.msg("1", 450, 300)
+    p.con(ts, 0, one, 0); p.con(sy2, 0, one, 0)
     lb = p.add("loadbang", 450, 60)
     mt = p.add("metro 50", 450, 90); p.con(lb, 0, mt, 0)
-    gate = p.add("spigot", 450, 200); p.con(mt, 0, gate, 0); p.con(one, 0, gate, 1)
-    tb = p.add("t b b b", 450, 230); p.con(gate, 0, tb, 0)
-    zero = p.msg("0", 600, 260); p.con(tb, 2, zero, 0); p.con(zero, 0, gate, 1)
-    # "l1 l2" + "\n" + line 3 words
-    la = p.add("list append", 10, 360)
-    p.con(tb, 1, line3, 0); p.con(line3, 0, la, 1)
-    p.con(tb, 0, lcd, 0); p.con(lcd, 0, la, 0)
-    nl = p.add("list tosymbol", 300, 420)
-    nlm = p.msg("92 110", 300, 390); p.con(lb, 0, nlm, 0); p.con(nlm, 0, nl, 0)
-    lp = p.add("list prepend", 10, 420); p.con(la, 0, lp, 0); p.con(nl, 0, lp, 1)
-    # "\n l1 l2 w3 w4 ..." -> l1 \n l2 \n w3 w4 ...
-    fm = p.msg("list $2 $1 $3 $1 $4", 10, 450); p.con(lp, 0, fm, 0)
-    of = p.add("oscformat display-strings-and-numbers", 10, 480); p.con(fm, 0, of, 0)
-    ps = p.add("list prepend send", 10, 510); p.con(of, 0, ps, 0)
-    lt = p.add("list trim", 10, 540); p.con(ps, 0, lt, 0)
-    ns = p.add("netsend -u -b", 10, 570); p.con(lt, 0, ns, 0)
-    cm = p.msg("connect 127.0.0.1 7562", 200, 540); p.con(lb, 0, cm, 0); p.con(cm, 0, ns, 0)
-    init = p.msg("symbol TX81Z", 600, 330); p.con(lb, 0, init, 0); p.con(init, 0, line3, 1)
+    gate = p.add("spigot", 450, 330); p.con(mt, 0, gate, 0); p.con(one, 0, gate, 1)
+    tb = p.add("t b b", 450, 360); p.con(gate, 0, tb, 0)
+    zero = p.msg("0", 600, 390); p.con(tb, 1, zero, 0); p.con(zero, 0, gate, 1)
+    p.con(tb, 0, line, 0)
+    ls = p.add("list", 10, 390); p.con(line, 0, ls, 0)
+    of = p.add("oscformat display-strings-and-numbers", 10, 420); p.con(ls, 0, of, 0)
+    ps = p.add("list prepend send", 10, 450); p.con(of, 0, ps, 0)
+    lt = p.add("list trim", 10, 480); p.con(ps, 0, lt, 0)
+    ns = p.add("netsend -u -b", 10, 510); p.con(lt, 0, ns, 0)
+    cm = p.msg("connect 127.0.0.1 7562", 200, 480); p.con(lb, 0, cm, 0); p.con(cm, 0, ns, 0)
+    init = p.msg("symbol TX81Z", 600, 300); p.con(lb, 0, init, 0); p.con(init, 0, line, 1); p.con(init, 0, one, 0)
     return p
 
 

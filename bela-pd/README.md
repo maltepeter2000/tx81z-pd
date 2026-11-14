@@ -50,8 +50,9 @@ Notes on channel 16 do not play the TX81Z. The battery RAM is also saved every
 
 ## OLED (O2O)
 
-`/display-strings-and-numbers` to 127.0.0.1:7562: the two LCD lines and a third
-line with the last changed parameter (`out1 = 67`) or what the control channel did.
+One line (`/display-strings-and-numbers` to 127.0.0.1:7562), the last event: a
+patch change shows the voice line of the TX81Z (`C15  LatelyBass`), a turned
+parameter `out1 = 67`, the control channel what it did (`stored slot 5`).
 
 ## OSC remote (UDP 7563)
 
