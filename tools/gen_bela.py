@@ -21,7 +21,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 import patchwriter as G                           # noqa: E402
 
-CTL_CH = 16
+CTL_CH = 10          # = Drums Channel of the Launchkey (drum pads)
 NSLOTS = 64
 RANDOM = ["pluck", "bass", "lead", "brass", "pad", "strings", "total"]
 # control channel notes: pad row 1 = 36-43, row 2 = 44-51

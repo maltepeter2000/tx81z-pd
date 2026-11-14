@@ -9,14 +9,14 @@
 #X obj 10 270 s tx;
 #X text 80 240 controller layer: CC pages 20-119 \, follows the TX81Z receive channel, f 68;
 #N canvas 0 50 900 520 midi 0;
-#X text 10 10 MIDI from Bela -> tx81z~. Channel 16 is the control channel (pd control). CC 1-19 (not 3) and 64-69 go to the TX81Z (mod wheel \, breath \, foot \, volume \, sustain ...) \, CC 20-119 are the controller layer [txcc]., f 100;
+#X text 10 10 MIDI from Bela -> tx81z~. Channel 10 is the control channel (pd control). CC 1-19 (not 3) and 64-69 go to the TX81Z (mod wheel \, breath \, foot \, volume \, sustain ...) \, CC 20-119 are the controller layer [txcc]., f 100;
 #X obj 10 60 notein;
 #X obj 90 85 - 1;
 #X obj 90 110 mod 16;
 #X obj 90 135 + 1;
 #X obj 10 170 pack f f f;
 #X msg 10 200 \$3 \$1 \$2;
-#X obj 10 230 route 16;
+#X obj 10 230 route 10;
 #X obj 10 290 s tx-ctl-note;
 #X msg 110 260 note \$2 \$3 \$1;
 #X obj 110 290 s tx;
@@ -27,7 +27,7 @@
 #X obj 320 135 + 1;
 #X obj 250 170 pack f f;
 #X msg 250 200 \$2 \$1;
-#X obj 250 230 route 16;
+#X obj 250 230 route 10;
 #X msg 250 260 bend \$2 \$1;
 #X obj 250 290 s tx;
 #X obj 400 60 pgmin;
@@ -37,7 +37,7 @@
 #X obj 460 135 + 1;
 #X obj 400 170 pack f f;
 #X msg 400 200 \$2 \$1;
-#X obj 400 230 route 16;
+#X obj 400 230 route 10;
 #X obj 400 290 s tx-ctl-pgm;
 #X msg 490 260 pgm \$2 \$1;
 #X obj 490 290 s tx;
@@ -50,7 +50,7 @@
 #X obj 600 170 pack f f f;
 #X obj 600 200 t l l;
 #X obj 700 230 unpack f f f;
-#X obj 700 260 expr ((\$f1 < 20 && \$f1 != 3) || (\$f1 >= 64 && \$f1 <= 69)) && \$f2 != 16;
+#X obj 700 260 expr ((\$f1 < 20 && \$f1 != 3) || (\$f1 >= 64 && \$f1 <= 69)) && \$f2 != 10;
 #X obj 600 300 spigot;
 #X msg 600 330 cc \$2 \$1 \$3;
 #X obj 600 360 s tx;
@@ -120,7 +120,7 @@
 #X connect 51 0 52 0;
 #X restore 10 320 pd midi;
 #N canvas 0 50 1000 700 control 0;
-#X text 10 10 Control channel 16: 36 next factory patch \, 37 next user patch \, 38 random pluck \, 39 random bass \, 40 random lead \, 41 random brass \, 42 random pad \, 43 random strings \, 44 random total \, 45 previous factory patch \, 46 previous user patch \, 47 store the voice into the current user slot \, 48 save the battery RAM \, 49 twice within 1 s: factory init. Program change 1-64 on channel 16: user slot 0-63 (txuser-bank.txt in the project folder)., f 100;
+#X text 10 10 Control channel 10: 36 next factory patch \, 37 next user patch \, 38 random pluck \, 39 random bass \, 40 random lead \, 41 random brass \, 42 random pad \, 43 random strings \, 44 random total \, 45 previous factory patch \, 46 previous user patch \, 47 store the voice into the current user slot \, 48 save the battery RAM \, 49 twice within 1 s: factory init. Program change 1-64 on channel 10: user slot 0-63 (txuser-bank.txt in the project folder)., f 100;
 #X obj 10 70 r tx-ctl-note;
 #X obj 10 100 unpack f f;
 #X obj 90 130 > 0;

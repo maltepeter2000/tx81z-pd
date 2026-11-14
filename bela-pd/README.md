@@ -35,9 +35,11 @@ its MIDI ports itself (the patch does not set a port).
   CC 3 = send all values back to the controller.
 - Parameter changes reach the firmware at its pace (one per 45 ms, newest value).
 
-## Control channel 16 (pads)
+## Control channel 10 (pads)
 
-Set the pads to send notes on channel 16. Row 1 = notes 36-43, row 2 = 44-49.
+Channel 10 = the Drums Channel of the Launchkey. With the Launchkey custom firmware
+(maltepeter2000/launchkey_firmware) the pads in Drum mode send notes in rows: top row
+36-43, bottom row 44-51.
 
 | Note | |
 |---|---|
@@ -50,9 +52,9 @@ Set the pads to send notes on channel 16. Row 1 = notes 36-43, row 2 = 44-49.
 | 47 | store the current voice into the current user slot (writes txuser-bank.txt) |
 | 48 | save the battery RAM now |
 | 49 | twice within 1 s: factory init |
-| program change 1-64 | load user slot 0-63 |
+| program change 1-64 on channel 10 | load user slot 0-63 |
 
-Notes on channel 16 do not play the TX81Z. The battery RAM is also saved every
+Notes on channel 10 do not play the TX81Z. The battery RAM is also saved every
 60 s and when the project stops.
 
 ## OLED (O2O)
