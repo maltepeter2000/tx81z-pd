@@ -55,6 +55,7 @@ private:
 	int32_t compute_volume(const Op &op, uint32_t phase, uint32_t am_offset) const;
 	int32_t compute_noise_volume(const Op &op, uint32_t am_offset) const;
 	void output_4op(int ch, int32_t *out);
+	bool channel_idle(int ch) const;
 
 	Regs m_regs;
 	Op m_op[32];        // by operator offset (register order)
@@ -63,6 +64,7 @@ private:
 	uint32_t m_modified = 0xff;
 	uint32_t m_prepare_count = 0;
 	uint32_t m_active = 0;
+	uint32_t m_idle = 0;   // channels at the envelope fixed point (not clocked)
 	uint8_t m_address = 0;
 	uint8_t m_noise_on = 0;
 };

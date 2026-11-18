@@ -7,6 +7,7 @@
 #include "txnative.h"
 #include "ymfm_opz.h"   // unmodified ymfm, reference for --check-ymfm
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -137,16 +138,16 @@ int main(int argc, char **argv)
 	std::vector<int16_t> pcm;
 	double resample_pos = 0.0, step = rate / 48000.0;   // same linear resampling as tx81z-emu
 	float prev_l = 0, prev_r = 0;
-	std::vector<bool> done(evs.size(), false);
+	std::stable_sort(evs.begin(), evs.end(), [](const Ev &a, const Ev &b) { return a.t < b.t; });
+	size_t next_ev = 0;
 	const uint64_t total = uint64_t(seconds * rate);
 	float l, r;
 	for (; pos < total; pos++)
 	{
 		double t = pos / rate;
-		for (size_t k = 0; k < evs.size(); k++)
+		for (; next_ev < evs.size() && t >= evs[next_ev].t; next_ev++)
 		{
-			if (done[k] || t < evs[k].t) continue;
-			done[k] = true;
+			const size_t k = next_ev;
 			if (evs[k].kind == 0) eng.load_voice(vdata.data(), vdata.data() + 93);
 			else if (evs[k].kind == 1) eng.note_on(evs[k].key, evs[k].vel);
 			else if (evs[k].kind == 2) eng.note_off(evs[k].key);

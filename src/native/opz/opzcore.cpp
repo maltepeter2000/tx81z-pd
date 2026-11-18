@@ -93,6 +93,7 @@ void OpzCore::clock_keystate(Op &o, uint32_t keystate)
 void OpzCore::prepare()
 {
 	m_active = 0;
+	m_idle = 0;
 	m_noise_on = uint8_t(m_regs.noise_enable());
 	for (int ch = 0; ch < 8; ch++)
 	{
@@ -118,7 +119,24 @@ void OpzCore::prepare()
 		}
 		if (active)
 			m_active |= 1u << ch;
+		if (channel_idle(ch))
+			m_idle |= 1u << ch;
 	}
+}
+
+// all four operators at the envelope fixed point and none needs its fixed-frequency sub-step: the
+// channel only shifts its feedback history until the next key on (which goes through prepare())
+bool OpzCore::channel_idle(int ch) const
+{
+	for (int i = 0; i < 4; i++)
+	{
+		const Op &o = m_op[opoffs(ch, i)];
+		if (o.state != EG_REVERB || o.att != 0x3ff)
+			return false;
+		if (o.cache.fix_mode && o.cache.phase_step == opdata_cache::PHASE_STEP_DYNAMIC)
+			return false;
+	}
+	return true;
 }
 
 // fm_operator::clock_envelope (no SSG-EG on the OPZ)
@@ -233,6 +251,8 @@ void OpzCore::generate(int32_t *left, int32_t *right)
 		Chan &c = m_ch[ch];
 		c.fb[0] = c.fb[1];
 		c.fb[1] = c.fb_in;
+		if (m_idle & (1u << ch))
+			continue;
 		for (int i = 0; i < 4; i++)
 		{
 			const int off = opoffs(ch, i);
@@ -263,6 +283,8 @@ void OpzCore::generate(int32_t *left, int32_t *right)
 			}
 			o.phase += step;
 		}
+		if (channel_idle(ch))
+			m_idle |= 1u << ch;
 	}
 
 	// fm_engine_base::output over the active channels, then the YM2414 output stage
