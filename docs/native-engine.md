@@ -54,6 +54,34 @@ restores the preset D1L / RR and EG shift / rev (see the comment in ymfm_opz.cpp
 Not in the load at all (computed per tick): LFO delay, PMD, AMD, sync, transpose, poly, pitch bend
 range, portamento, sustain, controllers, KVS, LS, OUT (levels go through the TL refresh).
 
+## Model status (tools/native/model.py, checked by tools/native/verify.py)
+
+`verify.py` loads 40 random voices into the firmware and the model and compares register by register
+(controller parameters, LFO depths and portamento neutral; they are stage 4).
+
+| Part | Result |
+|---|---|
+| voice load, every register write in order | 40 / 40 exact |
+| key code on a note (with transpose) | 40 / 40 exact |
+| total level on a note | 19 / 40 exact, the rest +1 on some operators |
+
+Rules found:
+
+- operators on chip slots: OP4 +0, OP3 +8, OP2 +16, OP1 +24
+- coarse: MUL / DT2 = all MUL x {1, 1.41, 1.57, 1.73} ratios sorted (computed, no table);
+  fixed mode: low nibble = CRS >> 2, bits 4-6 = range, DT2 as in ratio mode
+- detune 0..6 -> DT1 7 6 5 0 1 2 3; fine limited to 7 for CRS 0..3 (ratio < 1)
+- D1L -> 15 - D1L, RR -> max(1, RR); EG shift in the last C0 alt write, not for OP1
+- key code: s = key + transpose - 37, folded by octaves into 0..95, OPM note codes; KF bit 0 set
+- TL = min(127, OUT curve + algorithm attenuation + velocity + level scaling)
+  - algorithm attenuation: alg 5: OP1, OP2 +8; alg 6, 7: OP1-3 +13; alg 8: all +16
+  - velocity (KVS > 0): 7 - KVS + ((KVS * V[vel] + 8) >> 4), V = measured curve
+  - level scaling: measured table LS x key group (key + transpose - 24, folded to 24..108, // 3)
+  - open: the +1 cases come from rounding when velocity and level scaling are both active;
+    the level scaling math is not a simple formula -> read the firmware routine (disassembler next)
+- measured characteristics (LFO speed, BC EG bias, OUT curve, velocity, level scaling) are in
+  `tools/native/measured.json`: measurements of the behaviour, not ROM bytes or voice data
+
 ## Next
 
 - full value sweeps for the table parameters (CRS x DET, LFO speed, fixed frequency, BC EG bias)
