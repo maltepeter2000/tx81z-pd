@@ -126,6 +126,21 @@ Rules:
 - note off (also note on with velocity 0): `08 = c`, `20+c` without the key on bit
 - key code is not written at note on; the next periodic update writes it
 
+## C++ engine (`src/native`, library `txnative`, test runner `txnative-cli`)
+
+- `txn::Engine`: `init(rom)` (checks for the v1.6 ROM by CRC and takes the tables from it),
+  `load_voice(vced, aced)`, `note_on`, `note_off`, `render`; drives ymfm's YM2414 directly
+- periodic task every 584 samples: TL refresh of one half of the channels (bit 7 set), LFO depth
+  register (`19` / `17` alternating, neutral for now), key code / fraction of all 8 channels
+- `tools/native/verify_cpp.py`: random voices and note sequences through the firmware and the C++
+  engine; every voice load / note on / note off write in order plus the full register image afterwards
+  (except `00-07` and the LFO depths): 220 / 220 exact
+- `tools/native/listen.py OUTDIR PROGRAM...`: A/B WAV of a phrase (firmware, then native) with voices
+  from the internal bank (local only). Waveforms are not sample-aligned (MIDI and tick phase), so it
+  compares level envelopes and spectra: within about 1 dB for voices without LFO modulation
+- speed: 60 s of audio take 0.31 s with the native engine and 1.71 s with the firmware engine
+  (desktop, one core), i.e. about 5.6 x faster; ymfm is now most of the cost
+
 ## Next
 
 - per tick: TL modulation (`$7873`: AMS / breath / EG bias), LFO delay and depths (`17`, `19`),

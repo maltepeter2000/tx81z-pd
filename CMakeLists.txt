@@ -22,3 +22,16 @@ target_include_directories(tx81z_core PUBLIC src ${YMFM_DIR})
 
 add_executable(tx81z-emu src/main.cpp)
 target_link_libraries(tx81z-emu tx81z_core)
+
+# native engine: the YM2414 driven directly, no CPU emulation (tables from the user's ROM)
+add_library(txnative STATIC
+  src/native/txnative.cpp
+  ${YMFM_DIR}/ymfm_opz.cpp
+  ${YMFM_DIR}/ymfm_misc.cpp
+  ${YMFM_DIR}/ymfm_adpcm.cpp
+  ${YMFM_DIR}/ymfm_ssg.cpp
+)
+target_include_directories(txnative PUBLIC src/native ${YMFM_DIR})
+
+add_executable(txnative-cli src/native/txnative_cli.cpp)
+target_link_libraries(txnative-cli txnative)
