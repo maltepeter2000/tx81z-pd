@@ -98,6 +98,27 @@ the same folder as the patch (with `txcc.pd` and `txedit.pd`); the battery RAM f
   change, LCD, MIDI channel and a user bank (64 slots in `txuser-bank.txt` next to
   the editor: recall a slot, store to a slot, save / load the bank). `txcc` follows
   the channel `tx81z~` reports. Both are wired up in the help patch.
+
+### `tx81zn~`: native engine
+
+```
+cd pd && make          # builds tx81z~ and tx81zn~
+```
+
+`[tx81zn~ <rom> <nvram>]` plays the same voices without emulating the TX81Z's CPU: the
+firmware's voice, note, modulation and controller routines are rebuilt in C++ and drive the
+YM2414 directly with the firmware's register values (single mode). It uses a fraction of the
+CPU (Bela Gem: 2.5-9 % of a core instead of 14-24 %) and parameter changes take effect at once
+(no SysEx round trip, no 35 ms per change). The battery RAM file is only read: internal bank
+I01-I32, master tune and receive channel.
+
+- Same messages as `tx81z~` for `txedit` / `txcc`: raw MIDI (notes, CC, bend, program change,
+  SysEx parameter changes and voice dumps), `note`, `cc`, `pgm`, `bend`, `<name> <value>`,
+  `n`, `ninfo`, `vced`, `aced`, `getvoice`, `voicedata`, `random`, `channel`, `dumpreq`, `gain`
+- `bank <I|A|B|C|D> <1-32>` selects any voice, including bank D (program change reaches
+  I01-I32 and A01-C32 as on the TX81Z); `tune <0-127>` master tune
+- Not included: performance mode, micro tuning, the front panel and its display (the
+  `lcd` outlet shows the splash screen once)
 - If the nvram file given as argument does not exist yet, `tx81z~` runs the
   factory init by itself (~26 s, only while DSP is on): presets, then MIDI
   Control via the front panel (receive omni, program change, control change,

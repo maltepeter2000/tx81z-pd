@@ -382,11 +382,25 @@ void Engine::reset_voices()
 }
 
 // SysEx parameter change ($C0E4 and the handlers it calls): store, then rewrite what depends on it
-void Engine::set_param(char group, int num, int value)
+int Engine::get_param(char group, int num) const
+{
+	static const uint8_t PEG[6] = { 99, 99, 99, 50, 50, 50 };
+	if (group == 'V' && num >= 87 && num < 93) return PEG[num - 87];
+	if (group == 'V' && num >= 0 && num < 87) return r(VOICE + num);
+	if (group == 'A' && num >= 0 && num < 23) return r(VOICE + 87 + num);
+	return 0;
+}
+
+void Engine::set_param(char group, int num, int value, bool strict)
 {
 	// the firmware takes no change of portamento mode, the three DX21 switches (sustain, portamento,
 	// chorus) or the EG shift of OP1 by parameter change
-	if ((group == 'V' && (num == 65 || (num >= 68 && num <= 70))) || (group == 'A' && num == 19)) return;
+	if (group == 'A' && num == 19) return;
+	if (group == 'V' && (num == 65 || (num >= 68 && num <= 70)))
+	{
+		if (!strict) w(VOICE + num, value);   // no register depends on them
+		return;
+	}
 	if (group == 'V' && num >= 0 && num < 87) w(VOICE + num, value);
 	else if (group == 'A' && num >= 0 && num < 23) w(VOICE + 87 + num, value);
 	else return;

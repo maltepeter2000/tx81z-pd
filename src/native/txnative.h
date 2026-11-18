@@ -32,7 +32,11 @@ public:
 	void load_voice(const uint8_t *vced, const uint8_t *aced);
 	// one voice parameter as by a SysEx parameter change (group 'V' VCED 0..92 / 'A' ACED 0..22);
 	// sounding notes go on unless the firmware itself resets the voices for that parameter
-	void set_param(char group, int num, int value);
+	// strict = true: exactly the firmware's SysEx parameter change (it ignores portamento mode and the
+	// DX21 switches); false: like editing on the front panel, these are stored too
+	void set_param(char group, int num, int value, bool strict = true);
+	// current value of a voice parameter (VCED 0..92, ACED 0..22)
+	int get_param(char group, int num) const;
 	void note_on(int key, int vel);
 	void note_off(int key);
 	void control_change(int cc, int value);
