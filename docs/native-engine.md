@@ -234,7 +234,7 @@ modulation is on; OpzCore does it only when the PM value changes and skips silen
 - Pd object `tx81zn~` (`pd/tx81zn~.cpp`): done – ROM banks A-D, internal bank from the battery RAM
   (`src/native/txvoice.h`, records checked against the firmware's dumps of all 128 programs with
   `tools/native/vmem.py`), splash text; editor parameters go through `set_param(..., strict = false)`
-- editor in the style of a 4-operator FM synth (roles carrier / modulators from the algorithm)
+- FM editor `txfm` (roles carrier / modulators from the algorithm, `pd/txfm.h`): done
 - Bela Gem build of the Pd project
 - ymfm is now most of the cost; voices with the LFO running cost about 2.5 x more in ymfm than without
   (desktop: 60 s of a voice with LFO 0.9 s native vs 1.4 s firmware engine; without LFO 0.35 s vs 1.7 s)

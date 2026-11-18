@@ -17,20 +17,24 @@
 //   channel <0 omni | 1-16>, gain <f>, dumpreq (report every parameter again)
 //   tune <0-127>                            master tune (64 = centre)
 //   factoryinit                             all notes off, voice A01 (nothing is written)
+//   fm <control> <0-127>                    FM view (txfm.h): roles C / A / B from the algorithm
 // Program change: 0-31 internal I01-I32, 32-127 presets A01-C32 (the TX81Z's initial table).
 // Outlets: left / right audio, messages: info <name> <0-127> <text>, voice <name>, voicedata ...,
-//   channel <n>, status <text>, lcd <line1> <line2> (the splash screen, once on load)
+//   fm <control> <0-127> <text>, channel <n>, status <text>, lcd <line1> <line2> (the splash screen, once on load)
 
 #include "m_pd.h"
 #include "txnative.h"
 #include "txvoice.h"
 #include "txshared.h"
+#include "txfm.h"
 
 #ifndef _WIN32
 #include <dirent.h>
 #include <strings.h>
 #endif
 
+#include <climits>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -51,6 +55,8 @@ struct t_txn
 	float gain;
 	int channel;                      // 0 = omni, 1-16
 	int reported[NTXPARAMS];
+	int fm_reported[64];
+	char fm_text[64][16];
 	t_clock *rep_clock;
 	t_clock *stat_clock;
 	std::string *stat_text;
@@ -136,7 +142,26 @@ static void emit_info(t_txn *x, int i)
 	outlet_anything(x->out_msg, gensym("info"), 3, a);
 }
 
-// every change is reported once as info
+// FM view (txfm.h): fm <name> <0-127> <text>; an empty role reports - as its text
+static void emit_fm(t_txn *x, int i, int v, const char *text)
+{
+	t_atom a[3];
+	SETSYMBOL(&a[0], gensym(txfm::MACROS[i].name));
+	SETFLOAT(&a[1], v);
+	SETSYMBOL(&a[2], gensym(text));
+	outlet_anything(x->out_msg, gensym("fm"), 3, a);
+}
+
+static_assert(sizeof txfm::MACROS / sizeof txfm::MACROS[0] <= 64, "fm cache");
+
+static int fm_value(t_txn *x, int i, char *text, size_t nb)
+{
+	int v;
+	bool on = txfm::fm_get(i, [x](char g, int n) { return x->eng->get_param(g, n); }, v, text, nb);
+	return on ? v : -1 - v;   // the cache tells an empty role apart
+}
+
+// every change is reported once as info (and as fm for the FM view)
 static void rep_tick(t_txn *x)
 {
 	if (!x->ready) return;
@@ -146,6 +171,16 @@ static void rep_tick(t_txn *x)
 		if (v == x->reported[i]) continue;
 		x->reported[i] = v;
 		emit_info(x, i);
+	}
+	for (int i = 0; i < txfm::fm_count(); i++)
+	{
+		char text[32];
+		int c = fm_value(x, i, text, sizeof text);
+		text[15] = 0;   // the ratio text also depends on fine and fixed: compare it too
+		if (c == x->fm_reported[i] && !std::strcmp(text, x->fm_text[i])) continue;
+		x->fm_reported[i] = c;
+		std::strcpy(x->fm_text[i], text);
+		emit_fm(x, i, c < 0 ? -1 - c : c, text);
 	}
 }
 
@@ -359,9 +394,20 @@ static void txn_ninfo(t_txn *x, t_symbol *name)
 static void txn_vced(t_txn *x, t_floatarg p, t_floatarg d) { set_param(x, 'V', int(p), int(d)); }
 static void txn_aced(t_txn *x, t_floatarg p, t_floatarg d) { set_param(x, 'A', int(p), int(d)); }
 
+static void txn_fm(t_txn *x, t_symbol *name, t_floatarg v)
+{
+	int i = txfm::fm_find(name->s_name);
+	if (i < 0) { pd_error(x, "tx81zn~: fm: unknown control '%s'", name->s_name); return; }
+	if (!x->ready) return;
+	txfm::fm_set(i, int(v), [x](char g, int n) { return x->eng->get_param(g, n); },
+		[x](char g, int n, int val) { x->eng->set_param(g, n, val, false); });
+	clock_delay(x->rep_clock, 0);
+}
+
 static void txn_dumpreq(t_txn *x)
 {
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
+	for (int i = 0; i < 64; i++) x->fm_reported[i] = INT32_MIN;
 	clock_delay(x->rep_clock, 0);
 	if (x->ready) emit_voice_name(x);
 }
@@ -551,6 +597,7 @@ static void *txn_new(t_symbol *, int argc, t_atom *argv)
 	x->gain = 1.0f;
 	x->channel = 1;
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
+	for (int i = 0; i < 64; i++) x->fm_reported[i] = INT32_MIN;
 	x->status = 0;
 	x->nd = 0;
 	x->sx = new std::vector<uint8_t>();
@@ -605,6 +652,7 @@ void tx81zn_tilde_setup(void)
 	class_addmethod(txn_class, (t_method)txn_ninfo, gensym("ninfo"), A_SYMBOL, A_NULL);
 	class_addmethod(txn_class, (t_method)txn_vced, gensym("vced"), A_FLOAT, A_FLOAT, A_NULL);
 	class_addmethod(txn_class, (t_method)txn_aced, gensym("aced"), A_FLOAT, A_FLOAT, A_NULL);
+	class_addmethod(txn_class, (t_method)txn_fm, gensym("fm"), A_SYMBOL, A_FLOAT, A_NULL);
 	class_addmethod(txn_class, (t_method)txn_dumpreq, gensym("dumpreq"), A_NULL);
 	class_addmethod(txn_class, (t_method)txn_getvoice, gensym("getvoice"), A_NULL);
 	class_addmethod(txn_class, (t_method)txn_voicedata, gensym("voicedata"), A_GIMME, A_NULL);

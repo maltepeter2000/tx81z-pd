@@ -7,7 +7,7 @@ Bela), a native Bela C++ project and a Bela Pd project.
 | Folder | Contents |
 |---|---|
 | `src/` | emulator core (CPU, machine, LCD) and command-line tool |
-| `pd/` | Pd external `tx81z~` with help patch |
+| `pd/` | Pd externals `tx81z~` (firmware) and `tx81zn~` (native engine), help patch, editors `txedit` and `txfm` |
 | `bela/` | native Bela C++ project (auto play, OLED via O2O) – see `bela/README.md` |
 | `bela-pd/` | Bela Pd project with `tx81z~` and OSC remote – see `bela-pd/README.md` |
 | `tools/` | MAME logger, OPZ register decoder, power-on message editor |
@@ -119,6 +119,27 @@ I01-I32, master tune and receive channel.
   I01-I32 and A01-C32 as on the TX81Z); `tune <0-127>` master tune
 - Not included: performance mode, micro tuning, the front panel and its display (the
   `lcd` outlet shows the splash screen once)
+
+### `[txfm <bus>]`: FM editor for `tx81zn~`
+
+A second editor with 7 pages of 8 controls (one page per row, made for 8 encoders), in the
+style of 4-operator groovebox synths. The algorithm gives the operators roles: **C** = the
+carriers, **A** = the modulator of the main carrier OP1, **B** = the other modulators
+(algorithms 1-4: C 1, A 2, B 3+4; 5: C 1+3, A 2, B 4; 6 and 7: C 1+2+3, A 4; 8: C 1+2+3+4).
+A control of a role changes all of its operators.
+
+| Page | Controls |
+|---|---|
+| SYN 1 | algorithm, ratio C / A / B, mod A / B (modulator levels), feedback, mix (carriers against each other) |
+| SYN 2 | wave C / A / B, detune, fine C / A / B, level C |
+| ENV C / A / B | attack, decay, sustain, fade (decay 2), release, velocity, key level, key rate |
+| LFO | speed, wave, delay, pitch depth, amp depth, pitch sens, amp sens, key sync |
+| VOICE | poly / mono, bend range, porta mode, porta time, transpose, LFO amp on C / A / B |
+
+`tx81zn~` takes `fm <control> <0-127>` and reports `fm <control> <0-127> <text>` (the text is
+`-` when the role has no operator in this algorithm). The controls are defined in
+`pd/txfm.h`; `tools/gen_fmedit.py` generates `pd/txfm.pd` from it. `[txedit <bus>]` works on the
+same bus for every single parameter.
 - If the nvram file given as argument does not exist yet, `tx81z~` runs the
   factory init by itself (~26 s, only while DSP is on): presets, then MIDI
   Control via the front panel (receive omni, program change, control change,
