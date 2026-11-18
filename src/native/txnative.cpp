@@ -168,85 +168,158 @@ void Engine::build_levels()
 	}
 }
 
+// voice parameters from the stored voice copy (VCED 0..86 at VOICE, ACED 0..22 at VOICE + 87)
+int Engine::vp(int i) const { return r(VOICE + i); }
+int Engine::op_v(int oi, int f) const { return r(VOICE + oi * 13 + f); }
+int Engine::op_a(int oi, int f) const { return r(VOICE + 87 + oi * 5 + f); }
+
+// the firmware's clean-up of the stored voice (fine is clamped in the store only by a voice load)
+void Engine::clean_voice(bool load)
+{
+	for (int oi = 0; oi < 4; oi++)
+	{
+		w(VOICE + oi * 13 + 3, std::max(1, op_v(oi, 3)));                       // RR >= 1
+		if (load && op_v(oi, 11) < 4) w(VOICE + 87 + oi * 5 + 2, std::min(7, op_a(oi, 2)));   // fine <= 7 below ratio 1
+	}
+	w(VOICE + 87 + 19, 0);                                                     // no EG shift on OP1
+}
+
+// ---- register blocks (each for all 4 operators x 8 channels, in the firmware's order)
+int Engine::mul_field(int oi, int &dt2) const
+{
+	int crs = op_v(oi, 11);
+	dt2 = CRS[crs].dt2;
+	if (op_a(oi, 0)) return (op_a(oi, 1) << 4) | (crs >> 2);
+	return (DT1[op_v(oi, 12)] << 4) | CRS[crs].mul;
+}
+void Engine::write_80()
+{
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++)
+		write(uint8_t(0x80 + slot(ch, oi)), uint8_t((op_v(oi, 6) << 6) | (op_a(oi, 0) << 5) | op_v(oi, 0)));
+}
+void Engine::write_a0()
+{
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++)
+		write(uint8_t(0xA0 + slot(ch, oi)), uint8_t((op_v(oi, 8) << 7) | op_v(oi, 1)));
+}
+void Engine::write_c0()
+{
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++)
+	{
+		int d;
+		mul_field(oi, d);
+		write(uint8_t(0xC0 + slot(ch, oi)), uint8_t((d << 6) | op_v(oi, 2)));
+	}
+}
+void Engine::write_20()
+{
+	m_r20 = uint8_t(0x80 | (vp(53) << 3) | vp(52));
+	for (int ch = 0; ch < 8; ch++) { w(0x7913 + ch, m_r20); write(uint8_t(0x20 + ch), m_r20); }
+}
+void Engine::write_40()
+{
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++)
+	{
+		int d;
+		write(uint8_t(0x40 + slot(ch, oi)), uint8_t(mul_field(oi, d)));
+	}
+}
+void Engine::write_40_alt()
+{
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++)
+		write(uint8_t(0x40 + slot(ch, oi)), uint8_t(0x80 | (op_a(oi, 3) << 4) | op_a(oi, 2)));
+}
+void Engine::write_c0_alt()
+{
+	const int rev = op_a(4, 0);   // ACED 20
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++)
+	{
+		uint8_t val = uint8_t((op_a(oi, 4) << 6) | 0x28 | rev);
+		m_c_alt[slot(ch, oi)] = val;
+		write(uint8_t(0xC0 + slot(ch, oi)), val);
+	}
+}
+void Engine::write_38()
+{
+	for (int ch = 0; ch < 8; ch++) write(uint8_t(0x38 + ch), uint8_t((vp(60) << 4) | vp(61)));
+}
+void Engine::write_lfo()
+{
+	const int lfw = vp(59);
+	w(0x7852, lfw);
+	write(0x1B, uint8_t(lfw));
+	int d = scale(vp(54));
+	write(0x18, uint8_t(lfw == 3 ? d : 255 - r(T_ATT + d)));   // $9B02
+}
+void Engine::write_e0()
+{
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++)
+		write(uint8_t(0xE0 + slot(ch, oi)), uint8_t(((15 - op_v(oi, 4)) << 4) | op_v(oi, 3)));
+}
+
+// $912C: damp every voice, then let the chip reload its presets
+void Engine::damp_all()
+{
+	for (int ch = 0; ch < 8; ch++)
+	{
+		for (int oi = 0; oi < 4; oi++) write(uint8_t(0xE0 + slot(ch, oi)), 0xFE);
+		for (int oi = 0; oi < 4; oi++) write(uint8_t(0xC0 + slot(ch, oi)), uint8_t(m_c_alt[slot(ch, oi)] & 0xE8));
+	}
+	for (int ch = 0; ch < 8; ch++) write(0x08, uint8_t(ch));
+}
+
+// RAM derived from the voice (per channel copies of the instrument's values), levels
+void Engine::voice_ram()
+{
+	for (int ch = 0; ch < 8; ch++)
+	{
+		w(0x7D3B + ch, scale(vp(71)));
+		w(0x7D43 + ch, scale(vp(73)));
+		w(0x7D4B + ch, scale(op_a(4, 1)));
+		w(0x7D7B + ch, scale(vp(56)));
+		int ad = 99 - vp(55), n = 7 - ((ad & 0x70) >> 4);                  // $9CF5
+		w16(0x780E + 2 * ch, (((((ad & 0x0f) | 0x10) << 1) & 0xff) << 8) >> n);
+		w16(0x781E + 2 * ch, r16(T_LFO16 + 2 * vp(54)));
+		w(0x782E + ch, vp(58));
+		w(0x77C6 + ch, r(T_PORT + vp(66)));
+		w(0x7923 + ch, r(T_PBR + vp(64)));
+		w(0x792B + ch, vp(75) - 50);
+		w(0x7D1B + ch, scale(vp(67)));
+		w(0x7D33 + ch, scale(vp(76)));
+		w(0x791B + ch, vp(62) - 24);
+		for (int oi = 0; oi < 4; oi++) w(0x7853 + slot(ch, oi), r(T_EBS + op_v(oi, 7)));
+	}
+	w(0x7D13, scale(vp(57)));
+	w(0x7D15, scale(vp(72)));
+	w(0x7D17, scale(vp(74)));
+	w(0x7D19, scale(op_a(4, 2)));
+	build_levels();
+}
+
+// $94CE
 void Engine::load_voice(const uint8_t *vced, const uint8_t *aced)
 {
-	uint8_t v[93], a[23];
-	std::memcpy(v, vced, 93);
-	std::memcpy(a, aced, 23);
-	for (int oi = 0; oi < 4; oi++)   // the firmware's clean-up of the stored voice
-	{
-		v[oi * 13 + 3] = std::max<uint8_t>(1, v[oi * 13 + 3]);
-		if (v[oi * 13 + 11] < 4) a[oi * 5 + 2] = std::min<uint8_t>(7, a[oi * 5 + 2]);
-	}
-	a[19] = 0;
-	for (int i = 0; i < 87; i++) w(VOICE + i, v[i]);
-	for (int i = 0; i < 23; i++) w(VOICE + 87 + i, a[i]);
-
-	// ---- registers ($94CE), all 8 channels
-	const int alg = v[52], fb = v[53];
-	auto fld = [&](int oi, int f) { return int(v[oi * 13 + f]); };
-	auto afl = [&](int oi, int f) { return int(a[oi * 5 + f]); };
-	auto mulfield = [&](int oi, int &dt2) {
-		int crs = fld(oi, 11);
-		dt2 = CRS[crs].dt2;
-		if (afl(oi, 0)) return (afl(oi, 1) << 4) | (crs >> 2);
-		return (DT1[fld(oi, 12)] << 4) | CRS[crs].mul;
-	};
-	auto each = [&](auto fn) { for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++) fn(oi, ch); };
-
+	for (int i = 0; i < 87; i++) w(VOICE + i, vced[i]);
+	for (int i = 0; i < 23; i++) w(VOICE + 87 + i, aced[i]);
+	clean_voice(true);
 	for (int ch = 0; ch < 8; ch++)
 	{
 		for (int oi = 0; oi < 4; oi++) write(uint8_t(0xE0 + slot(ch, oi)), 0xFE);
 		for (int oi = 0; oi < 4; oi++) write(uint8_t(0xC0 + slot(ch, oi)), 0x28);
 	}
 	for (int ch = 0; ch < 8; ch++) write(0x08, uint8_t(ch));
-	each([&](int oi, int ch) { write(uint8_t(0x80 + slot(ch, oi)), uint8_t((fld(oi, 6) << 6) | (afl(oi, 0) << 5) | fld(oi, 0))); });
-	each([&](int oi, int ch) { write(uint8_t(0xA0 + slot(ch, oi)), uint8_t((fld(oi, 8) << 7) | fld(oi, 1))); });
-	each([&](int oi, int ch) { int d; mulfield(oi, d); write(uint8_t(0xC0 + slot(ch, oi)), uint8_t((d << 6) | fld(oi, 2))); });
-	each([&](int oi, int ch) { write(uint8_t(0xC0 + slot(ch, oi)), 0x28); });
-	m_r20 = uint8_t(0x80 | (fb << 3) | alg);
-	for (int ch = 0; ch < 8; ch++) { w(0x7913 + ch, m_r20); write(uint8_t(0x20 + ch), m_r20); }
-	each([&](int oi, int ch) { int d; write(uint8_t(0x40 + slot(ch, oi)), uint8_t(mulfield(oi, d))); });
-	each([&](int oi, int ch) { write(uint8_t(0x40 + slot(ch, oi)), uint8_t(0x80 | (afl(oi, 3) << 4) | afl(oi, 2))); });
-	const int rev = a[20];
-	each([&](int oi, int ch) {
-		uint8_t val = uint8_t((afl(oi, 4) << 6) | 0x28 | rev);   // a[19] (OP1) is 0
-		m_c_alt[slot(ch, oi)] = val;
-		write(uint8_t(0xC0 + slot(ch, oi)), val);
-	});
-	for (int ch = 0; ch < 8; ch++) write(uint8_t(0x38 + ch), uint8_t((v[60] << 4) | v[61]));
-	const int lfw = v[59], lfs = v[54];
-	write(0x1B, uint8_t(lfw));
-	int d = scale(lfs);
-	write(0x18, uint8_t(lfw == 3 ? d : 255 - r(T_ATT + d)));   // $9B02
-	each([&](int oi, int ch) { write(uint8_t(0xE0 + slot(ch, oi)), uint8_t(((15 - fld(oi, 4)) << 4) | fld(oi, 3))); });
-
-	// ---- RAM (per channel copies of the instrument's values)
-	for (int ch = 0; ch < 8; ch++)
-	{
-		w(0x7D3B + ch, scale(v[71]));
-		w(0x7D43 + ch, scale(v[73]));
-		w(0x7D4B + ch, scale(a[21]));
-		w(0x7D7B + ch, scale(v[56]));
-		int ad = 99 - v[55], n = 7 - ((ad & 0x70) >> 4);                  // $9CF5
-		w16(0x780E + 2 * ch, (((((ad & 0x0f) | 0x10) << 1) & 0xff) << 8) >> n);
-		w16(0x781E + 2 * ch, r16(T_LFO16 + 2 * v[54]));
-		w(0x782E + ch, v[58]);
-		w(0x77C6 + ch, r(T_PORT + v[66]));
-		w(0x7923 + ch, r(T_PBR + v[64]));
-		w(0x792B + ch, v[75] - 50);
-		w(0x7D1B + ch, scale(v[67]));
-		w(0x7D33 + ch, scale(v[76]));
-		w(0x791B + ch, v[62] - 24);
-		for (int oi = 0; oi < 4; oi++) w(0x7853 + slot(ch, oi), r(T_EBS + v[oi * 13 + 7]));
-	}
-	w(0x7D13, scale(v[57]));
-	w(0x7D15, scale(v[72]));
-	w(0x7D17, scale(v[74]));
-	w(0x7D19, scale(a[22]));
-	w(0x7852, v[59]);
-	build_levels();
-
+	write_80();
+	write_a0();
+	write_c0();
+	for (int oi = 0; oi < 4; oi++) for (int ch = 0; ch < 8; ch++) write(uint8_t(0xC0 + slot(ch, oi)), 0x28);
+	write_20();
+	write_40();
+	write_40_alt();
+	write_c0_alt();
+	write_38();
+	write_lfo();
+	write_e0();
+	voice_ram();
 	reset_voices();
 }
 
@@ -266,6 +339,56 @@ void Engine::reset_voices()
 	for (int i = 0; i < 8; i++) w(0x7F01 + i, 0);          // and their counts
 	m_next = 0;
 	m_qlen = 0;
+}
+
+// SysEx parameter change ($C0E4 and the handlers it calls): store, then rewrite what depends on it
+void Engine::set_param(char group, int num, int value)
+{
+	// the firmware takes no change of portamento mode, the three DX21 switches (sustain, portamento,
+	// chorus) or the EG shift of OP1 by parameter change
+	if ((group == 'V' && (num == 65 || (num >= 68 && num <= 70))) || (group == 'A' && num == 19)) return;
+	if (group == 'V' && num >= 0 && num < 87) w(VOICE + num, value);
+	else if (group == 'A' && num >= 0 && num < 23) w(VOICE + 87 + num, value);
+	else return;
+	clean_voice(false);
+	if (group == 'V' && num < 52)
+	{
+		switch (num % 13)
+		{
+		case 0: case 6: write_80(); break;                         // AR, RS
+		case 1: case 8: write_a0(); break;                         // D1R, AME
+		case 2: write_c0(); break;                                 // D2R
+		case 3: case 4: write_e0(); break;                         // RR, D1L
+		case 11: write_80(); write_40(); write_40_alt(); write_c0(); break;   // CRS
+		case 12: write_40(); break;                                // DET
+		default: break;                                            // LS, EBS, KVS, OUT: RAM only
+		}
+	}
+	else if (group == 'A' && num < 20)
+	{
+		switch (num % 5)
+		{
+		case 0: case 1: case 2: write_80(); write_40(); write_40_alt(); write_c0(); break;   // FIX, FIXRG, FINE
+		case 3: write_40(); write_40_alt(); write_c0(); break;     // OSW
+		default: write_c0_alt(); break;                            // SHFT
+		}
+	}
+	else if (group == 'A' && num == 20) write_c0_alt();            // reverb rate
+	else if (group == 'V')
+	{
+		switch (num)
+		{
+		case 52: damp_all(); reset_voices(); write_20(); break;   // algorithm
+		case 53: write_20(); break;                                // feedback
+		case 54: case 55: case 56: case 57: case 58: case 59:      // LFO
+		case 71: case 72: case 73: case 74: write_lfo(); break;    // wheel / breath sensitivities
+		case 60: case 61: write_38(); break;                       // PMS, AMS
+		case 63: damp_all(); reset_voices(); break;                // poly / mono
+		default: break;
+		}
+	}
+	if (group == 'A' && (num == 21 || num == 22)) write_lfo();     // foot sensitivities
+	voice_ram();
 }
 
 // ---------------------------------------------------------------------------------------------

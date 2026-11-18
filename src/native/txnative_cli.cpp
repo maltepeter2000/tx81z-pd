@@ -18,7 +18,7 @@
 
 namespace {
 
-struct Ev { double t; int kind; int key, vel; std::vector<uint8_t> midi; };   // kind 0 load, 1 on, 2 off, 3 midi
+struct Ev { double t; int kind; int key, vel; std::vector<uint8_t> midi; };   // kind 0 load, 1 on, 2 off, 3 midi, 4 param (key = group, vel = num, midi[0] = value)
 
 std::vector<uint8_t> read_file(const std::string &p)
 {
@@ -65,6 +65,14 @@ int main(int argc, char **argv)
 		else if (a == "--wav") wav = next();
 		else if (a == "--ramdump") { std::string s = next(); auto c = s.find(':'); dump_t = std::atof(s.substr(0, c).c_str()); dump_f = s.substr(c + 1); }
 		else if (a == "--check-ymfm") check_ymfm = true;
+		else if (a == "--param")
+		{
+			// S:G:NUM:VALUE, G = V (VCED) or A (ACED)
+			std::string s = next();
+			double t; char g; int num, val;
+			if (std::sscanf(s.c_str(), "%lf:%c:%d:%d", &t, &g, &num, &val) != 4) { std::fprintf(stderr, "bad --param %s\n", s.c_str()); return 1; }
+			evs.push_back({ t, 4, g, num, { uint8_t(val) } });
+		}
 		else if (a == "--phase-test") { phase_test = next(); phase_out = next(); }
 		else if (a == "--phase") { std::string s = next(); phase_next = std::atoi(s.c_str()); phase_b = s.find('b') != std::string::npos; }
 		else if (a == "--midi")
@@ -151,6 +159,7 @@ int main(int argc, char **argv)
 			if (evs[k].kind == 0) eng.load_voice(vdata.data(), vdata.data() + 93);
 			else if (evs[k].kind == 1) eng.note_on(evs[k].key, evs[k].vel);
 			else if (evs[k].kind == 2) eng.note_off(evs[k].key);
+			else if (evs[k].kind == 4) eng.set_param(char(evs[k].key), evs[k].vel, evs[k].midi[0]);
 			else
 			{
 				auto &m = evs[k].midi;

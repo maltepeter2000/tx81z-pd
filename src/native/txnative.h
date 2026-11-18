@@ -30,6 +30,9 @@ public:
 
 	// VCED (93 bytes) and ACED (23 bytes) parameter blocks, as in the SysEx voice dumps
 	void load_voice(const uint8_t *vced, const uint8_t *aced);
+	// one voice parameter as by a SysEx parameter change (group 'V' VCED 0..92 / 'A' ACED 0..22);
+	// sounding notes go on unless the firmware itself resets the voices for that parameter
+	void set_param(char group, int num, int value);
 	void note_on(int key, int vel);
 	void note_off(int key);
 	void control_change(int cc, int value);
@@ -64,6 +67,23 @@ private:
 	void power_on();
 	void reset_controllers();
 	void build_levels();
+	int vp(int i) const;
+	int op_v(int oi, int f) const;
+	int op_a(int oi, int f) const;
+	void clean_voice(bool load);
+	int mul_field(int oi, int &dt2) const;
+	void write_80();
+	void write_a0();
+	void write_c0();
+	void write_20();
+	void write_40();
+	void write_40_alt();
+	void write_c0_alt();
+	void write_38();
+	void write_lfo();
+	void write_e0();
+	void damp_all();
+	void voice_ram();
 
 	// timer task
 	void phase_a();
