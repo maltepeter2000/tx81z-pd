@@ -59,6 +59,7 @@ struct t_txn
 	char fm_text[64][16];
 	t_clock *rep_clock;
 	t_clock *stat_clock;
+	t_clock *ch_clock;      // reports the channel once the outlets are connected
 	std::string *stat_text;
 	// MIDI parser
 	uint8_t status, d[2];
@@ -404,12 +405,15 @@ static void txn_fm(t_txn *x, t_symbol *name, t_floatarg v)
 	clock_delay(x->rep_clock, 0);
 }
 
+static void report_channel(t_txn *x);
+
 static void txn_dumpreq(t_txn *x)
 {
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
 	for (int i = 0; i < 64; i++) x->fm_reported[i] = INT32_MIN;
 	clock_delay(x->rep_clock, 0);
 	if (x->ready) emit_voice_name(x);
+	report_channel(x);
 }
 
 static void txn_anything(t_txn *x, t_symbol *s, int argc, t_atom *argv)
@@ -508,7 +512,7 @@ static void txn_nvram(t_txn *x, t_symbol *s)
 	if (x->ready) x->eng->master_tune(nv[0x1565]);
 	int rx = nv[0x1566];
 	x->channel = rx >= 16 ? 0 : rx + 1;
-	report_channel(x);
+	clock_delay(x->ch_clock, 0);
 }
 
 static void txn_rom(t_txn *x, t_symbol *s)
@@ -595,7 +599,7 @@ static void *txn_new(t_symbol *, int argc, t_atom *argv)
 	x->dir = canvas_getdir(canvas_getcurrent());
 	x->ready = false;
 	x->gain = 1.0f;
-	x->channel = 1;
+	x->channel = 0;          // omni until the battery RAM says otherwise
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
 	for (int i = 0; i < 64; i++) x->fm_reported[i] = INT32_MIN;
 	x->status = 0;
@@ -611,6 +615,7 @@ static void *txn_new(t_symbol *, int argc, t_atom *argv)
 	x->out_msg = outlet_new(&x->x_obj, 0);
 	x->rep_clock = clock_new(x, (t_method)rep_tick);
 	x->stat_clock = clock_new(x, (t_method)stat_tick);
+	x->ch_clock = clock_new(x, (t_method)report_channel);
 	x->stat_text = new std::string();
 	// [tx81zn~ <rom> <nvram>]
 	if (argc >= 1 && argv[0].a_type == A_SYMBOL) txn_rom(x, atom_getsymbol(&argv[0]));
@@ -622,6 +627,7 @@ static void txn_free(t_txn *x)
 {
 	clock_free(x->rep_clock);
 	clock_free(x->stat_clock);
+	clock_free(x->ch_clock);
 	delete x->stat_text;
 	delete x->eng;
 	delete x->rom;

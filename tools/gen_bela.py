@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 """Generates bela-pd/tx81z-pd/_main.pd: a lean TX81Z for Bela (Pd), no GUI.
 
-usage: python3 tools/gen_bela.py [outfile]   (default: bela-pd/tx81z-pd/_main.pd)
+usage: python3 tools/gen_bela.py [--native] [outfile]
+  default: bela-pd/tx81z-pd/_main.pd with [tx81z~] (firmware emulation)
+  --native: bela-pd/tx81zn-pd/_main.pd with [tx81zn~] (native engine): the battery RAM is only read
+  (bank I, MIDI channel), so there is no save; the OLED shows the voice name on a voice change
 
 - [tx81z~] on the bus tx / tx-out (the same messages as on the desktop)
 - MIDI from Bela: notes, bend, program change, aftertouch, CC 1-19 / 64-69 to the TX81Z
@@ -31,6 +34,10 @@ PAD_TEXT = {"factory+": "next factory patch", "user+": "next user patch", "facto
             "user-": "previous user patch", "store": "store the voice into the current user slot",
             "save": "save the battery RAM", "finit": "twice within 1 s: factory init"}
 SAVE_EVERY_MS = 60000
+NATIVE = "--native" in sys.argv
+OBJ = "tx81zn~" if NATIVE else "tx81z~"
+if NATIVE:   # nothing to save: tx81zn~ only reads the battery RAM
+    PADS = [pd for pd in PADS if pd[1] != "save"]
 
 
 def fold(p, src, out, x, y):
@@ -43,7 +50,7 @@ def fold(p, src, out, x, y):
 
 def midi_sub():
     p = G.P("midi", 900, 520)
-    p.note(f"MIDI from Bela -> tx81z~. Channel {CTL_CH} is the control channel (pd control). "
+    p.note(f"MIDI from Bela -> {OBJ}. Channel {CTL_CH} is the control channel (pd control). "
            "CC 1-19 (not 3) and 64-69 go to the TX81Z (mod wheel, breath, foot, volume, sustain ...), "
            "CC 20-119 are the controller layer [txcc].", 10, 10)
     # notes
@@ -163,13 +170,8 @@ def control_sub():
     fs = p.add("f", 860, 480); p.con(tbl, 0, fs, 0); p.con(slot, 0, fs, 1)
     sm = p.msg("stored slot $1", 860, 510); p.con(fs, 0, sm, 0)
     o2 = p.add("s tx-oled-note", 860, 540); p.con(sm, 0, o2, 0)
-    # save the battery RAM: now, and every minute
-    sv = p.msg("save", 300, 480); p.con(sel, out["save"], sv, 0); p.con(sv, 0, stx, 0)
-    svm = p.msg("battery RAM saved", 300, 540); p.con(sel, out["save"], svm, 0)
-    o3 = p.add("s tx-oled-note", 300, 570); p.con(svm, 0, o3, 0)
-    lb2 = p.add("loadbang", 200, 640)
-    dl = p.add(f"del {SAVE_EVERY_MS}", 200, 670); p.con(lb2, 0, dl, 0)
-    p.con(dl, 0, sv, 0); p.con(dl, 0, dl, 0)                     # every minute, not at load
+    if not NATIVE:
+        save_ram(p, sel, out, stx)
     # factory init: twice within 1 s
     tf2 = p.add("t b b", 700, 240); p.con(sel, out["finit"], tf2, 0)
     tm = p.add("timer", 700, 300); p.con(tf2, 1, tm, 1); p.con(tf2, 0, tm, 0)
@@ -177,10 +179,20 @@ def control_sub():
     s01 = p.add("sel 1 0", 700, 360); p.con(lt3, 0, s01, 0)
     fi = p.msg("factoryinit", 700, 390); p.con(s01, 0, fi, 0)
     s6 = p.add("s tx", 700, 420); p.con(fi, 0, s6, 0)
-    fm = p.msg("factory init ...", 800, 390); p.con(s01, 0, fm, 0)
+    fm = p.msg("voice A01" if NATIVE else "factory init ...", 800, 390); p.con(s01, 0, fm, 0)
     ag = p.msg("again: factory init", 900, 390); p.con(s01, 1, ag, 0)
     o4 = p.add("s tx-oled-note", 800, 420); p.con(fm, 0, o4, 0); p.con(ag, 0, o4, 0)
     return p
+
+
+def save_ram(p, sel, out, stx):
+    """save the battery RAM: now, and every minute"""
+    sv = p.msg("save", 300, 480); p.con(sel, out["save"], sv, 0); p.con(sv, 0, stx, 0)
+    svm = p.msg("battery RAM saved", 300, 540); p.con(sel, out["save"], svm, 0)
+    o3 = p.add("s tx-oled-note", 300, 570); p.con(svm, 0, o3, 0)
+    lb2 = p.add("loadbang", 200, 640)
+    dl = p.add(f"del {SAVE_EVERY_MS}", 200, 670); p.con(lb2, 0, dl, 0)
+    p.con(dl, 0, sv, 0); p.con(dl, 0, dl, 0)                     # every minute, not at load
 
 
 def oled_sub():
@@ -196,8 +208,11 @@ def oled_sub():
     sy2 = p.add("symbol", 10, 210); p.con(up, 1, sy2, 1)
     # voice change: after 150 ms (the firmware has drawn it) show the voice line; the values of
     # the voice dump stay off the display for 500 ms
-    tv = p.add("t b", 300, 120); p.con(rl, 2, tv, 0)
-    dv = p.add("del 150", 300, 150); p.con(tv, 0, dv, 0); p.con(dv, 0, sy2, 0)
+    if NATIVE:   # no front panel: the voice name itself
+        vn = p.add("symbol", 300, 150); p.con(rl, 2, vn, 0)
+    else:
+        tv = p.add("t b", 300, 120); p.con(rl, 2, tv, 0)
+        dv = p.add("del 150", 300, 150); p.con(tv, 0, dv, 0); p.con(dv, 0, sy2, 0)
     # a parameter shows only when it was turned (n <name> ... on the bus), not from voice dumps
     rb = p.add("r tx", 600, 180)
     rnn = p.add("route n", 600, 210); p.con(rb, 0, rnn, 0)
@@ -221,6 +236,8 @@ def oled_sub():
     # dirty flag + metro
     one = p.msg("1", 450, 300)
     p.con(ts, 0, one, 0); p.con(sy2, 0, one, 0); p.con(st, 0, one, 0); p.con(cand, 0, one, 0)
+    if NATIVE:
+        p.con(vn, 0, line, 1); p.con(vn, 0, one, 0)
     lb = p.add("loadbang", 450, 60)
     mt = p.add("metro 50", 450, 90); p.con(lb, 0, mt, 0)
     gate = p.add("spigot", 450, 330); p.con(mt, 0, gate, 0); p.con(one, 0, gate, 1)
@@ -239,8 +256,9 @@ def oled_sub():
 
 def remote_sub():
     p = G.P("remote", 700, 300)
-    p.note("OSC on UDP 7563: /tx81z/<message> <args> -> tx81z~ (e.g. /tx81z/random pad, "
-           "/tx81z/pgm 110, /tx81z/press play, /tx81z/n out1 64).", 10, 10)
+    p.note(f"OSC on UDP 7563: /tx81z/<message> <args> -> {OBJ} (e.g. /tx81z/random pad, "
+           "/tx81z/pgm 110, /tx81z/n out1 64" + (", /tx81z/fm algo 64, /tx81z/bank D 3)." if NATIVE
+                                                 else ", /tx81z/press play)."), 10, 10)
     nr = p.add("netreceive -u -b 7563", 10, 60)
     op = p.add("oscparse", 10, 90); p.con(nr, 0, op, 0)
     lt = p.add("list trim", 10, 120); p.con(op, 0, lt, 0)
@@ -252,11 +270,16 @@ def remote_sub():
 
 def build():
     top = G.P(None, 900, 420)
-    top.note("TX81Z on Bela: tx81z~ (original firmware) - MIDI in, controller layer, OLED, "
-             "control channel, OSC remote. Files: tx81z~.pd_linux, txcc.pd, tx81z-v1.6.bin, "
-             "tx81z.nvram (made by the factory init), txuser-bank.txt.", 10, 10)
+    if NATIVE:
+        top.note("TX81Z on Bela: tx81zn~ (native engine) - MIDI in, controller layer, OLED, "
+                 "control channel, OSC remote. Files: tx81zn~.pd_linux, txcc.pd, tx81z-v1.6.bin, "
+                 "tx81z.nvram (optional, read only: bank I and MIDI channel), txuser-bank.txt.", 10, 10)
+    else:
+        top.note("TX81Z on Bela: tx81z~ (original firmware) - MIDI in, controller layer, OLED, "
+                 "control channel, OSC remote. Files: tx81z~.pd_linux, txcc.pd, tx81z-v1.6.bin, "
+                 "tx81z.nvram (made by the factory init), txuser-bank.txt.", 10, 10)
     r = top.add("r tx", 10, 70)
-    t = top.add("tx81z~ tx81z-v1.6.bin tx81z.nvram", 10, 100); top.con(r, 0, t, 0)
+    t = top.add(f"{OBJ} tx81z-v1.6.bin tx81z.nvram", 10, 100); top.con(r, 0, t, 0)
     d = top.add("dac~ 1 2", 10, 150); top.con(t, 0, d, 0); top.con(t, 1, d, 1)
     so = top.add("s tx-out", 300, 150); top.con(t, 2, so, 0)
     ro = top.add("r tx-out", 10, 210)
@@ -277,6 +300,8 @@ def build():
 
 
 if __name__ == "__main__":
-    out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "bela-pd", "tx81z-pd", "_main.pd")
+    args = [a for a in sys.argv[1:] if a != "--native"]
+    out = args[0] if args else os.path.join(ROOT, "bela-pd", "tx81zn-pd" if NATIVE else "tx81z-pd", "_main.pd")
+    os.makedirs(os.path.dirname(out), exist_ok=True)
     open(out, "w").write(build())
     print("wrote", out)

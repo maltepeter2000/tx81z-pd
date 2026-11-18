@@ -372,7 +372,7 @@
 #X connect 37 0 25 0;
 #X restore 230 320 pd oled;
 #N canvas 0 50 700 300 remote 0;
-#X text 10 10 OSC on UDP 7563: /tx81z/<message> <args> -> tx81z~ (e.g. /tx81z/random pad \, /tx81z/pgm 110 \, /tx81z/press play \, /tx81z/n out1 64)., f 100;
+#X text 10 10 OSC on UDP 7563: /tx81z/<message> <args> -> tx81z~ (e.g. /tx81z/random pad \, /tx81z/pgm 110 \, /tx81z/n out1 64 \, /tx81z/press play)., f 100;
 #X obj 10 60 netreceive -u -b 7563;
 #X obj 10 90 oscparse;
 #X obj 10 120 list trim;
