@@ -192,6 +192,22 @@ Tests with mono voices, mode switches and all notes off: `MONO=1 CHMODE=1 test_c
 Not ported: micro tuning (`$7F99`), performance mode. CC 6 (data entry) and aftertouch are ignored by
 the firmware in single mode as well.
 
+## CPU on the Bela Gem (Cortex-A53, 64 bit)
+
+60 s of audio rendered without output (`txnative-cli` / `tx81z-emu`, same voices; firmware loads them by
+SysEx). Share of one core:
+
+| | firmware engine | native engine (OpzCore) |
+|---|---|---|
+| no notes | 13.9 % | - |
+| voice without LFO, 1 note | 14.7 % | 2.5 % |
+| voice without LFO, 8 notes | 18.2 % | 8.1 % |
+| voice with LFO, 1 note | 20.5 % | 2.6 % |
+| voice with LFO, 8 notes | 24.3 % | 9.2 % |
+
+The unmodified ymfm recomputes the phase step of all 32 operators every sample while LFO pitch
+modulation is on; OpzCore does it only when the PM value changes and skips silent operators and channels.
+
 ## Next
 
 - integrate into `tx81z~` as a second engine (ROM banks A-D, internal bank from the NVRAM, user bank),
