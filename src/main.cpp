@@ -9,7 +9,9 @@
 #include "tx81z.h"
 
 #include <cmath>
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
@@ -43,6 +45,8 @@ void usage()
 		"  --opzlog FILE      log YM2414 register writes as CSV (time_s,reg,val)\n"
 		"  --opzpc            add pc, ROM bank and 6 stack words to each --opzlog line\n"
 		"  --trace FILE T0 T1 instruction trace (bank:pc a b x sp) between T0 and T1 seconds\n"
+		"  --pcdump FILE T0 T1 A,B,...  RAM snapshot each time the CPU reaches one of the addresses\n"
+		"                     (records: u16 addr, f64 time, 256 B internal RAM, 8 KB external RAM)\n"
 		"  --ramdump S:FILE   write internal RAM ($00-$FF) + external RAM ($6000-$7FFF) at S seconds\n"
 		"  --quiet            do not print LCD changes\n"
 		"buttons: store utility edit play param- param+ dec inc vol- vol+ cursor\n");
@@ -88,6 +92,9 @@ int main(int argc, char **argv)
 	bool quiet = false, opzpc = false;
 	std::string trace;
 	std::vector<std::pair<double, std::string>> ramdumps;
+	std::string pcdump;
+	double pcd_t0 = 0, pcd_t1 = 0;
+	std::vector<uint16_t> pcd_addrs;
 	double trace_t0 = 0, trace_t1 = 0;
 	std::vector<TX81Z::Button> held;
 	std::vector<Event> events;
@@ -112,6 +119,15 @@ int main(int argc, char **argv)
 			double t; std::string rest;
 			if (!parse_time_arg(next(), t, rest)) { usage(); return 1; }
 			ramdumps.push_back({ t, rest });
+		}
+		else if (a == "--pcdump")
+		{
+			pcdump = next();
+			pcd_t0 = std::atof(next().c_str());
+			pcd_t1 = std::atof(next().c_str());
+			std::istringstream in(next());
+			std::string h;
+			while (std::getline(in, h, ',')) pcd_addrs.push_back(uint16_t(std::stoul(h, nullptr, 16)));
 		}
 		else if (a == "--trace")
 		{
@@ -178,17 +194,34 @@ int main(int argc, char **argv)
 			std::fprintf(log, "\n");
 		};
 	}
-	struct TraceCtx { TX81Z *s; FILE *f; double t0, t1; } tctx{ &synth, nullptr, trace_t0, trace_t1 };
-	if (!trace.empty())
+	struct TraceCtx
 	{
-		tctx.f = std::fopen(trace.c_str(), "w");
+		TX81Z *s; FILE *f; double t0, t1;
+		FILE *pf; double p0, p1; std::vector<uint16_t> addrs;
+	} tctx{ &synth, nullptr, trace_t0, trace_t1, nullptr, pcd_t0, pcd_t1, pcd_addrs };
+	if (!trace.empty()) tctx.f = std::fopen(trace.c_str(), "w");
+	if (!pcdump.empty()) tctx.pf = std::fopen(pcdump.c_str(), "wb");
+	if (tctx.f || tctx.pf)
+	{
 		synth.cpu().trace_ctx = &tctx;
 		synth.cpu().trace_fn = [](void *ctx, uint16_t pc) {
 			auto *t = static_cast<TraceCtx *>(ctx);
 			double now = t->s->time();
-			if (now < t->t0 || now > t->t1) return;
-			auto &c = t->s->cpu();
-			std::fprintf(t->f, "%d:%04x %02x %02x %04x %04x\n", t->s->rombank(), pc, c.d() >> 8, c.d() & 0xff, c.x(), c.sp());
+			if (t->f && now >= t->t0 && now <= t->t1)
+			{
+				auto &c = t->s->cpu();
+				std::fprintf(t->f, "%d:%04x %02x %02x %04x %04x\n", t->s->rombank(), pc, c.d() >> 8, c.d() & 0xff, c.x(), c.sp());
+			}
+			if (t->pf && now >= t->p0 && now <= t->p1 && t->s->rombank() == 1 &&
+			    std::find(t->addrs.begin(), t->addrs.end(), pc) != t->addrs.end())
+			{
+				uint8_t rec[2 + 8 + 0x100 + 0x2000];
+				rec[0] = uint8_t(pc >> 8); rec[1] = uint8_t(pc);
+				std::memcpy(rec + 2, &now, 8);
+				for (int a = 0; a < 0x100; a++) rec[10 + a] = t->s->peek(uint16_t(a));
+				for (int a = 0; a < 0x2000; a++) rec[10 + 0x100 + a] = t->s->peek(uint16_t(0x6000 + a));
+				std::fwrite(rec, sizeof rec, 1, t->pf);
+			}
 		};
 	}
 	synth.on_midi_out = [&](uint8_t b) {
@@ -280,6 +313,7 @@ int main(int argc, char **argv)
 	}
 	if (log) std::fclose(log);
 	if (tctx.f) std::fclose(tctx.f);
+	if (tctx.pf) std::fclose(tctx.pf);
 	if (!nvram.empty())
 	{
 		if (synth.save_nvram(nvram)) std::fprintf(stderr, "saved NVRAM to %s\n", nvram.c_str());

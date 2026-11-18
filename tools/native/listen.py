@@ -18,10 +18,16 @@ PHRASE = [(0.0, 60, 100, 1.0), (0.0, 64, 90, 1.0), (0.0, 67, 80, 1.0), (1.2, 72,
 LEN = 4.2
 
 
+CTRL = [(3.3, [0xB0, 1, x]) for x in ()] + [(3.4 + 0.05 * i, [0xE0, 0, 64 + 4 * i]) for i in range(8)] + \
+       [(3.8, [0xE0, 0, 64])]
+
+
 def events(t0):
+    """(time, midi bytes): the phrase plus a pitch bend gesture on the last notes"""
     ev = []
     for t, k, v, d in PHRASE:
-        ev += [(t0 + t, "on", k, v), (t0 + t + d, "off", k)]
+        ev += [(t0 + t, [0x90, k, v]), (t0 + t + d, [0x80, k, 0])]
+    ev += [(t0 + t, b) for t, b in CTRL]
     return sorted(ev, key=lambda e: e[0])
 
 
@@ -38,8 +44,8 @@ def firmware(prog, d):
     fn = os.path.join(d, "fw.wav")
     args = [P.EMU, "--rom", P.ROM, "--nvram", nv, "--seconds", str(6.5 + LEN), "--quiet", "--wav", fn,
             "--midi", f"6:C0 {prog:02X}"]
-    for e in events(6.5):
-        args += ["--midi", f"{e[0]:.4f}:" + (f"90 {e[2]:02X} {e[3]:02X}" if e[1] == "on" else f"80 {e[2]:02X} 00")]
+    for t, b in events(6.5):
+        args += ["--midi", f"{t:.4f}:" + " ".join(f"{x:02X}" for x in b)]
     subprocess.run(args, check=True, capture_output=True)
     return read(fn, 6.5)
 
@@ -48,8 +54,8 @@ def native(v, a, d):
     vf, fn = os.path.join(d, "v.bin"), os.path.join(d, "nat.wav")
     open(vf, "wb").write(bytes(v + a))
     args = [C.CLI, "--rom", P.ROM, "--voice", vf, "--at", "0", "--seconds", str(0.5 + LEN), "--wav", fn]
-    for e in events(0.5):
-        args += ["--note", f"{e[0]:.4f}:on:{e[2]}:{e[3]}" if e[1] == "on" else f"{e[0]:.4f}:off:{e[2]}"]
+    for t, b in events(0.5):
+        args += ["--midi", f"{t:.4f}:" + " ".join(f"{x:02X}" for x in b)]
     subprocess.run(args, check=True, capture_output=True)
     return read(fn, 0.5)
 

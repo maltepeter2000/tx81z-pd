@@ -2,7 +2,7 @@
 // for comparison with the firmware (tx81z-emu --opzlog).
 //
 //   txnative-cli --rom ROM --voice VOICE.bin [--at S] [--note S:on|off:KEY[:VEL]]... [--seconds S]
-//                [--opzlog FILE] [--wav FILE]      (WAV at 48 kHz, resampled like tx81z-emu)
+//                [--midi S:HEX...] [--phase N[b]] [--opzlog FILE] [--wav FILE]      (WAV at 48 kHz, resampled like tx81z-emu)
 // VOICE.bin = 93 VCED bytes followed by 23 ACED bytes.
 #include "txnative.h"
 
@@ -10,12 +10,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
 namespace {
 
-struct Ev { double t; int kind; int key, vel; };   // kind 0 = load, 1 = on, 2 = off
+struct Ev { double t; int kind; int key, vel; std::vector<uint8_t> midi; };   // kind 0 load, 1 on, 2 off, 3 midi
 
 std::vector<uint8_t> read_file(const std::string &p)
 {
@@ -43,6 +44,11 @@ int main(int argc, char **argv)
 {
 	std::string rom, voice, opzlog, wav;
 	double seconds = 2.0, load_at = 0.0;
+	int phase_next = -1;
+	std::string phase_test, phase_out;
+	double dump_t = -1;
+	std::string dump_f;
+	bool phase_b = true;
 	std::vector<Ev> evs;
 	for (int i = 1; i < argc; i++)
 	{
@@ -54,19 +60,58 @@ int main(int argc, char **argv)
 		else if (a == "--seconds") seconds = std::atof(next().c_str());
 		else if (a == "--opzlog") opzlog = next();
 		else if (a == "--wav") wav = next();
+		else if (a == "--ramdump") { std::string s = next(); auto c = s.find(':'); dump_t = std::atof(s.substr(0, c).c_str()); dump_f = s.substr(c + 1); }
+		else if (a == "--phase-test") { phase_test = next(); phase_out = next(); }
+		else if (a == "--phase") { std::string s = next(); phase_next = std::atoi(s.c_str()); phase_b = s.find('b') != std::string::npos; }
+		else if (a == "--midi")
+		{
+			std::string s = next();
+			auto c = s.find(':');
+			Ev e{ std::atof(s.substr(0, c).c_str()), 3, 0, 0, {} };
+			std::istringstream in(s.substr(c + 1));
+			std::string h;
+			while (in >> h) e.midi.push_back(uint8_t(std::stoul(h, nullptr, 16)));
+			evs.push_back(e);
+		}
 		else if (a == "--note")
 		{
 			std::string s = next();
 			double t; char kind[8] = {}; int key = 60, vel = 100;
 			if (std::sscanf(s.c_str(), "%lf:%3[onf]:%d:%d", &t, kind, &key, &vel) < 3) { std::fprintf(stderr, "bad --note %s\n", s.c_str()); return 1; }
-			evs.push_back({ t, std::string(kind) == "on" ? 1 : 2, key, vel });
+			evs.push_back({ t, std::string(kind) == "on" ? 1 : 2, key, vel, {} });
 		}
 		else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 1; }
 	}
 	auto romdata = read_file(rom);
+	if (!phase_test.empty())
+	{
+		// --phase-test IN OUT: IN = records (u8 phase 'A'/'B', 256 B internal RAM, 8 KB external RAM);
+		// OUT = per record: RAM after the phase, u16 number of writes, writes (reg, val)
+		txn::Engine eng;
+		std::string err;
+		if (!eng.init(romdata.data(), romdata.size(), err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+		auto in = read_file(phase_test);
+		FILE *f = std::fopen(phase_out.c_str(), "wb");
+		std::vector<uint8_t> wr;
+		eng.on_write = [&](uint8_t r, uint8_t v) { wr.push_back(r); wr.push_back(v); };
+		const size_t rec = 1 + 0x100 + 0x2000;
+		for (size_t o = 0; o + rec <= in.size(); o += rec)
+		{
+			eng.test_set_ram(&in[o + 1], &in[o + 1 + 0x100]);
+			wr.clear();
+			eng.test_phase(in[o] == 'B');
+			for (int x = 0; x < 0x100; x++) std::fputc(eng.peek(uint16_t(x)), f);
+			for (int x = 0x6000; x < 0x8000; x++) std::fputc(eng.peek(uint16_t(x)), f);
+			uint16_t n = uint16_t(wr.size() / 2);
+			std::fwrite(&n, 2, 1, f);
+			std::fwrite(wr.data(), 1, wr.size(), f);
+		}
+		std::fclose(f);
+		return 0;
+	}
 	auto vdata = read_file(voice);
 	if (vdata.size() != 93 + 23) { std::fprintf(stderr, "voice file must be 116 bytes\n"); return 1; }
-	evs.insert(evs.begin(), { load_at, 0, 0, 0 });
+	evs.insert(evs.begin(), { load_at, 0, 0, 0, {} });
 
 	txn::Engine eng;
 	const double rate = eng.sample_rate();
@@ -79,6 +124,7 @@ int main(int argc, char **argv)
 	}
 	std::string err;
 	if (!eng.init(romdata.data(), romdata.size(), err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+	if (phase_next >= 0) eng.set_phase(phase_next, phase_b);
 	std::vector<int16_t> pcm;
 	double resample_pos = 0.0, step = rate / 48000.0;   // same linear resampling as tx81z-emu
 	float prev_l = 0, prev_r = 0;
@@ -94,9 +140,29 @@ int main(int argc, char **argv)
 			done[k] = true;
 			if (evs[k].kind == 0) eng.load_voice(vdata.data(), vdata.data() + 93);
 			else if (evs[k].kind == 1) eng.note_on(evs[k].key, evs[k].vel);
-			else eng.note_off(evs[k].key);
+			else if (evs[k].kind == 2) eng.note_off(evs[k].key);
+			else
+			{
+				auto &m = evs[k].midi;
+				int st = m[0] & 0xf0;
+				if (st == 0x90 && m.size() >= 3) eng.note_on(m[1], m[2]);
+				else if (st == 0x80 && m.size() >= 3) eng.note_off(m[1]);
+				else if (st == 0xB0 && m.size() >= 3) eng.control_change(m[1], m[2]);
+				else if (st == 0xE0 && m.size() >= 3) eng.pitch_bend(m[1] | m[2] << 7);
+			}
 		}
 		eng.render(&l, &r, 1);
+		if (!dump_f.empty() && t >= dump_t)
+		{
+			// same layout as tx81z-emu --ramdump: $00-$FF, then $6000-$7FFF
+			if (FILE *f = std::fopen(dump_f.c_str(), "wb"))
+			{
+				for (int x = 0; x < 0x100; x++) std::fputc(eng.peek(uint16_t(x)), f);
+				for (int x = 0x6000; x < 0x8000; x++) std::fputc(eng.peek(uint16_t(x)), f);
+				std::fclose(f);
+			}
+			dump_f.clear();
+		}
 		if (!wav.empty())
 		{
 			while (resample_pos < 1.0)

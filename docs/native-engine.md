@@ -141,7 +141,48 @@ Rules:
 - speed: 60 s of audio take 0.31 s with the native engine and 1.71 s with the firmware engine
   (desktop, one core), i.e. about 5.6 x faster; ymfm is now most of the cost
 
+## Stage 4: modulation and controllers (ported routine by routine)
+
+The C++ engine keeps the firmware's RAM variables at their CPU addresses and every routine is a direct
+port (`tools/native/fwport.py` is the Python reference with the same structure):
+
+| Routine | Port | What |
+|---|---|---|
+| `$A390` | `bend_all`, `bc_bias` | pitch bend (MSB, curve `$A4B8`, range `$A0E4`) and breath pitch bias (`$A485`) |
+| `$AAF7` | `soft_lfo` | software LFO (only for the performance 'vib' setting; state kept anyway) |
+| `$AA1A` | `pitch_depth` | controller pitch depth (wheel, breath, foot x sensitivities) and PM depth of LFO 1 / 2 |
+| `$A538`, `$A210` | `keycode`, `note_keycode` | portamento glide, key code / fraction (also right at note on) |
+| `$A64D` | `lfo_delay` | two-stage LFO delay (wait, then ramp), restarted by every note on |
+| `$A68F`, `$A769` | `channel_volume`, `tl_refresh` | EG bias (breath), foot volume, MIDI volume; TL with modulation |
+| `$A94B` | `am_depth` | AM depth from AMD x delay plus wheel / breath / foot |
+| `$CE0C` | `control_change` | CC 1, 2, 4, 5 (portamento time), 7, 64 (sustain), 65 (portamento on / off) |
+| `$8596`, `$885F` | `note_off`, sustain | note off with sustain, release of sustained voices |
+
+The timer task runs in two halves 292 samples apart (`$8F1F`): phase A = `$A390`, `$AAF7`, `$AA1A`,
+`$A538`; phase B = `$A64D`, `$A68F` (with `$A769`), `$A94B`.
+
+Tests (firmware in the emulator as reference):
+
+- `tools/native/test_port.py`: Python ports vs RAM snapshots of the firmware right before and after each
+  timer phase (`tx81z-emu --pcdump`): 10 702 / 10 702 phases exact (random voices with LFO, controllers,
+  portamento; random notes, wheel, breath, foot, volume, bend, sustain, portamento switch / time)
+- `tools/native/test_cpp_port.py`: the same snapshots through the C++ engine (`txnative-cli --phase-test`):
+  5 452 / 5 452 phases exact, RAM and register writes
+- `tools/native/test_cpp_events.py`: C++ event handling vs the firmware (RAM state after random event
+  streams, plus every voice load / note on / note off write in order): 30 / 30 exact
+- `tools/native/verify_cpp.py`: register image and write order: 220 / 220 exact
+- an end-to-end comparison of the whole register stream is not exact by construction: the firmware
+  handles a MIDI message over about a millisecond and its timer can interrupt in the middle; the native
+  engine handles a message at once
+
+Not yet ported: mono mode (`$8406`, voice mode mono / fingered portamento), all notes off / mono / poly
+CCs (123, 126, 127), micro tuning (`$7F99`), performance mode. CC 6 (data entry) and aftertouch are
+ignored by the firmware in single mode as well.
+
 ## Next
 
-- per tick: TL modulation (`$7873`: AMS / breath / EG bias), LFO delay and depths (`17`, `19`),
-  pitch bend, portamento, mono, controllers, sustain
+- mono mode and the remaining channel mode messages
+- integrate into `tx81z~` as a second engine (ROM banks A-D, internal bank from the NVRAM, user bank),
+  splash text, Mac and Bela builds, CPU measurement on Bela
+- ymfm is now most of the cost; voices with the LFO running cost about 2.5 x more in ymfm than without
+  (desktop: 60 s of a voice with LFO 0.9 s native vs 1.4 s firmware engine; without LFO 0.35 s vs 1.7 s)
