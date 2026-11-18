@@ -27,6 +27,7 @@ target_link_libraries(tx81z-emu tx81z_core)
 add_library(txnative STATIC
   src/native/txnative.cpp
   src/native/opz/ymfmx_opz.cpp
+  src/native/opz/opzcore.cpp
 )
 target_include_directories(txnative PUBLIC src/native)
 

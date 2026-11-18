@@ -63,7 +63,7 @@ enum : uint32_t
 } // namespace
 
 Engine::Engine()
-	: m_opz(*this), m_mem(0x10000, 0)
+	: m_mem(0x10000, 0)
 {
 	for (int c = 0; c < VOICES; c++) m_key[c] = -1;
 }
@@ -85,8 +85,7 @@ bool Engine::init(const uint8_t *rom, size_t len, std::string &error)
 void Engine::write(uint8_t reg, uint8_t val)
 {
 	if (on_write) on_write(reg, val);
-	m_opz.write(0, reg);
-	m_opz.write(1, val);
+	m_opz.write(reg, val);
 }
 
 // single mode: one instrument (0) on all 8 voices, LFO 1
@@ -872,7 +871,7 @@ void Engine::am_depth()
 
 void Engine::render(float *left, float *right, int n)
 {
-	ymfmx::ym2414::output_data out;
+	int32_t out[2];
 	for (int i = 0; i < n; i++)
 	{
 		if (m_ready && ++m_phase_pos >= PHASE)
@@ -881,11 +880,11 @@ void Engine::render(float *left, float *right, int n)
 			if (m_phase_b) phase_b(); else phase_a();
 			m_phase_b = !m_phase_b;
 		}
-		m_opz.generate(&out);
-		m_last_raw[0] = out.data[0];
-		m_last_raw[1] = out.data[1];
-		float l = float(out.data[0]) * (0.60f / 32768.0f);
-		float rr = float(out.data[1]) * (0.60f / 32768.0f);
+		m_opz.generate(&out[0], &out[1]);
+		m_last_raw[0] = out[0];
+		m_last_raw[1] = out[1];
+		float l = float(out[0]) * (0.60f / 32768.0f);
+		float rr = float(out[1]) * (0.60f / 32768.0f);
 		if (left) left[i] = std::clamp(l, -1.0f, 1.0f);
 		if (right) right[i] = std::clamp(rr, -1.0f, 1.0f);
 	}

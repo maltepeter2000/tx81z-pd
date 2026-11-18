@@ -184,6 +184,7 @@ public:
 
 	// return the current noise state, gated by the noise clock
 	uint32_t noise_state() const { return m_noise_state; }
+	uint32_t lfo_am_value(int index) const { return m_lfo_am[index]; }   // [tx81z] for the OPZ core
 
 	// caching helpers
 	void cache_operator_data(uint32_t choffs, uint32_t opoffs, opdata_cache &cache);

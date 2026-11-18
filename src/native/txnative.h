@@ -13,11 +13,11 @@
 #include <string>
 #include <vector>
 
-#include "opz/ymfmx_opz.h"   // ymfm fork with optimisations that keep the output bit-identical
+#include "opz/opzcore.h"   // YM2414 core, bit-identical to ymfm
 
 namespace txn {
 
-class Engine : public ymfmx::ymfm_interface
+class Engine
 {
 public:
 	static constexpr uint32_t OPZ_CLOCK = 3579545;
@@ -26,7 +26,7 @@ public:
 
 	Engine();
 	bool init(const uint8_t *rom, size_t len, std::string &error);
-	uint32_t sample_rate() const { return m_opz.sample_rate(OPZ_CLOCK); }
+	uint32_t sample_rate() const { return OPZ_CLOCK / 64; }
 
 	// VCED (93 bytes) and ACED (23 bytes) parameter blocks, as in the SysEx voice dumps
 	void load_voice(const uint8_t *vced, const uint8_t *aced);
@@ -96,7 +96,7 @@ private:
 	void note_keycode(int c);
 	void write_keycode(int c, int d, int cur);
 
-	ymfmx::ym2414 m_opz;
+	OpzCore m_opz;
 	std::vector<uint8_t> m_mem;
 	bool m_ready = false;
 	int32_t m_last_raw[2]{};
