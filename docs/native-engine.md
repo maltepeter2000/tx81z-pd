@@ -54,18 +54,48 @@ restores the preset D1L / RR and EG shift / rev (see the comment in ymfm_opz.cpp
 Not in the load at all (computed per tick): LFO delay, PMD, AMD, sync, transpose, poly, pitch bend
 range, portamento, sustain, controllers, KVS, LS, OUT (levels go through the TL refresh).
 
+## Reading the firmware
+
+`tx81z-emu --opzpc` adds the CPU address (`bank:pc`) and six stack words to every `--opzlog` line, so each
+register write points at the routine that made it; `--trace FILE T0 T1` logs every instruction in a time
+window, `--ramdump S:FILE` writes the internal and external RAM at a time. `tools/native/dasm6303.py`
+disassembles the ROM (opcode names from our CPU core's dispatch table). All sound code runs in ROM bank 1,
+where CPU address = file offset.
+
+| Routine | What it does |
+|---|---|
+| `$9F00` | per operator at voice load: OUT -> attenuation (`$9FD9`), algorithm offset, then the 29-point level scaling curve (RAM `$7943`, 29 bytes per operator, `$74` per channel) |
+| `$9FEC` | per operator at voice load: velocity offset `15 - 2 KVS` (`$78D3`) and factor `32 KVS` (`$78F3`) |
+| `$A155` | note on: per-note level (RAM `$78A3`) = velocity term + curve[key position], TL write with bit 7 clear |
+| `$A769` | every tick, 4 channels x 4 operators (alternating halves): TL = (`$78A3` + modulation `$7873`) / 2, bit 7 set |
+| `$A68F` | every tick: channel volume registers `00-07` (BC EG bias, controllers) |
+| `$9B02` | LFO speed -> `18` (`16` for the second LFO) |
+| `$A53F` | every tick: key code / fraction `28-37` |
+| `$CC86` | MIDI velocity -> velocity factor (RAM `$F1`) |
+
+Levels are kept in **half TL steps** (8 bit, saturating at 255) and halved only when written; this is
+where the +1 differences of the earlier measured model came from.
+
+## Tables from the user's ROM
+
+The native engine needs the same ROM file as the firmware engine anyway, so it reads its few tables from
+that file at start-up instead of keeping copies in the repository (`tools/native/romtables.py`):
+OUT curve for levels 0..19 (`$9FA8`), level scaling curve shape (`$9FBC`, 29), key -> scaling position
+(`$A2F0`, 96), velocity curve (`$DF94`, 128) and the amount -> attenuation table (`$A82B`, 256, also used
+for the LFO speed). The engine checks the ROM version before using them.
+
 ## Model status (tools/native/model.py, checked by tools/native/verify.py)
 
-`verify.py` loads 40 random voices into the firmware and the model and compares register by register
+`verify.py` loads random voices into the firmware and the model and compares register by register
 (controller parameters, LFO depths and portamento neutral; they are stage 4).
 
 | Part | Result |
 |---|---|
-| voice load, every register write in order | 40 / 40 exact |
-| key code on a note (with transpose) | 40 / 40 exact |
-| total level on a note | 19 / 40 exact, the rest +1 on some operators |
+| voice load, every register write in order (all LFO waves) | 600 / 600 exact |
+| key code on a note (with transpose) | 600 / 600 exact |
+| total level on a note (velocity, level scaling, algorithm) | 600 / 600 exact |
 
-Rules found:
+Rules:
 
 - operators on chip slots: OP4 +0, OP3 +8, OP2 +16, OP1 +24
 - coarse: MUL / DT2 = all MUL x {1, 1.41, 1.57, 1.73} ratios sorted (computed, no table);
@@ -73,17 +103,19 @@ Rules found:
 - detune 0..6 -> DT1 7 6 5 0 1 2 3; fine limited to 7 for CRS 0..3 (ratio < 1)
 - D1L -> 15 - D1L, RR -> max(1, RR); EG shift in the last C0 alt write, not for OP1
 - key code: s = key + transpose - 37, folded by octaves into 0..95, OPM note codes; KF bit 0 set
-- TL = min(127, OUT curve + algorithm attenuation + velocity + level scaling)
-  - algorithm attenuation: alg 5: OP1, OP2 +8; alg 6, 7: OP1-3 +13; alg 8: all +16
-  - velocity (KVS > 0): 7 - KVS + ((KVS * V[vel] + 8) >> 4), V = measured curve
-  - level scaling: measured table LS x key group (key + transpose - 24, folded to 24..108, // 3)
-  - open: the +1 cases come from rounding when velocity and level scaling are both active;
-    the level scaling math is not a simple formula -> read the firmware routine (disassembler next)
-- measured characteristics (LFO speed, BC EG bias, OUT curve, velocity, level scaling) are in
-  `tools/native/measured.json`: measurements of the behaviour, not ROM bytes or voice data
+- LFO speed: d = (speed * 660) >> 8; register = 255 - att[d], sample and hold: d
+- level (half TL steps, all sums saturate at 255):
+  - base = 2 * min(127, out_att + algorithm offset); out_att = table for OUT < 20, else 99 - OUT;
+    offset for alg 5: OP1, OP2 +8; alg 6, 7: OP1-3 +13; alg 8: all +16
+  - curve[i] = base + (shape[i] * depth) >> 8, depth = (LS * 660) >> 8, i = 0..28
+  - position: k = key - 13 + transpose - 24 folded into 0..95; i = clamp(pos[k] - 14, 0, 112) >> 2
+  - velocity term (KVS > 0) = 15 - 2 KVS + (32 KVS * vel[velocity]) >> 8
+  - note level = velocity term + curve[i]; TL = (note level + modulation) >> 1
+- BC EG bias -> `00-07` (channel volume) is still a measured table in `tools/native/measured.json`;
+  ymfm does not use these registers, so they do not change the sound
 
 ## Next
 
-- full value sweeps for the table parameters (CRS x DET, LFO speed, fixed frequency, BC EG bias)
-- note on: TL from OUT / LS / KVS / velocity / key, KC / KF from note / transpose / fine
-- per tick: LFO delay ramp, pitch bend, portamento, controllers
+- note on / off sequence and voice allocation (8 voices), key on bit in `20-27`
+- per tick: TL modulation (`$7873`: AMS / breath / EG bias), LFO delay and depths (`17`, `19`),
+  pitch bend, portamento, mono, controllers, sustain

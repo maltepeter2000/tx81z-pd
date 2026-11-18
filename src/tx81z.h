@@ -66,6 +66,15 @@ public:
 	bool lcd_changed_peek() const { return m_lcd.dirty_peek(); }
 	uint8_t ram(int addr) const { return m_ram[addr & 0x1fff]; }   // battery RAM (system setup etc.)
 	uint8_t leds() const { return m_leds; }
+	int rombank() const { return m_rombank; }
+	// side-effect free memory read for debug tools (internal regs/RAM, external RAM, ROM)
+	uint8_t peek(uint16_t addr) const
+	{
+		if (addr < 0x100) return m_cpu.internal_ram(uint8_t(addr));
+		if ((addr >> 13) == 3) return m_ram[addr & 0x1fff];
+		if (addr >= 0x8000) return m_rom[(m_rombank << 15) | (addr & 0x7fff)];
+		return 0xff;
+	}
 	double time() const { return double(m_samples) / sample_rate(); }
 
 	// hooks

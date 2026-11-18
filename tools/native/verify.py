@@ -10,10 +10,10 @@ NEUTRAL = os.environ.get("NEUTRAL", "1") == "1"
 def rand_voice(rng):
     v, a = S.voice()
     for nm, g, num, lo, hi, off, lbl, names in T.PARAMS:
-        if nm in ("poly", "pmod", "pon", "chor", "lfw"):
+        if nm in ("poly", "pmod", "pon", "chor"):
             continue
         (v if g == "V" else a)[num] = rng.randint(lo, hi)
-    v[59] = rng.randint(0, 2)
+    v[59] = rng.randint(0, 3)
     if NEUTRAL:   # controllers and LFO depths neutral (studied separately)
         for nm, val in (("bcpb", 50), ("bceb", 0), ("bcp", 0), ("bca", 0), ("fcp", 0), ("fca", 0), ("mwp", 0),
                         ("mwa", 0), ("pmd", 0), ("amd", 0), ("lfd", 0), ("fcv", 0), ("port", 0)):
@@ -31,8 +31,6 @@ def check(seed):
     bad = []
     for r in sorted(set(got) | set(exp)):
         e = [x for x in exp.get(r, []) if x is not None]
-        if r == 0x18 and None in exp.get(r, []):
-            continue
         if got.get(r, []) != e:
             bad.append((hex(r), got.get(r), e))
     ch = [x & 7 for t, r, x in w if t >= 8.5 and r == 0x08]
@@ -42,7 +40,7 @@ def check(seed):
     for k in (1, 2, 3, 4):
         o = MD.op_fields(v, a, k)
         g = img.get(0x60 + MD.slot(ch, k), 0) & 0x7F
-        e = MD.note_tl(o, key + v[62] - 24, vel, v[52], k)
+        e = MD.note_tl(o, key, v[62], vel, v[52], k)
         if g != e:
             tl_bad.append((k, g, e, o["out"], o["kvs"], o["ls"], o["sh"], o["ebs"]))
     s = MD.semitone(key, v[62])

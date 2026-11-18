@@ -41,6 +41,9 @@ void usage()
 		"  --midi S:HEX       send MIDI bytes at S seconds, e.g. \"2:90 3C 64\"\n"
 		"  --syx S:FILE       send the bytes of FILE at S seconds\n"
 		"  --opzlog FILE      log YM2414 register writes as CSV (time_s,reg,val)\n"
+		"  --opzpc            add pc, ROM bank and 6 stack words to each --opzlog line\n"
+		"  --trace FILE T0 T1 instruction trace (bank:pc a b x sp) between T0 and T1 seconds\n"
+		"  --ramdump S:FILE   write internal RAM ($00-$FF) + external RAM ($6000-$7FFF) at S seconds\n"
 		"  --quiet            do not print LCD changes\n"
 		"buttons: store utility edit play param- param+ dec inc vol- vol+ cursor\n");
 }
@@ -82,7 +85,10 @@ int main(int argc, char **argv)
 {
 	std::string rom, nvram, wav, opzlog;
 	double seconds = 5.0, release_at = 3.0;
-	bool quiet = false;
+	bool quiet = false, opzpc = false;
+	std::string trace;
+	std::vector<std::pair<double, std::string>> ramdumps;
+	double trace_t0 = 0, trace_t1 = 0;
 	std::vector<TX81Z::Button> held;
 	std::vector<Event> events;
 
@@ -100,6 +106,19 @@ int main(int argc, char **argv)
 		else if (a == "--opzlog") opzlog = next();
 		else if (a == "--release-at") release_at = std::atof(next().c_str());
 		else if (a == "--quiet") quiet = true;
+		else if (a == "--opzpc") opzpc = true;
+		else if (a == "--ramdump")
+		{
+			double t; std::string rest;
+			if (!parse_time_arg(next(), t, rest)) { usage(); return 1; }
+			ramdumps.push_back({ t, rest });
+		}
+		else if (a == "--trace")
+		{
+			trace = next();
+			trace_t0 = std::atof(next().c_str());
+			trace_t1 = std::atof(next().c_str());
+		}
 		else if (a == "--hold")
 		{
 			std::istringstream in(next());
@@ -146,9 +165,30 @@ int main(int argc, char **argv)
 	if (!opzlog.empty())
 	{
 		log = std::fopen(opzlog.c_str(), "w");
-		std::fprintf(log, "time_s,reg,val\n");
+		std::fprintf(log, opzpc ? "time_s,reg,val,pc,stack\n" : "time_s,reg,val\n");
 		synth.on_opz_write = [&](uint8_t reg, uint8_t val) {
-			std::fprintf(log, "%.6f,%02x,%02x\n", synth.time(), reg, val);
+			if (!opzpc) { std::fprintf(log, "%.6f,%02x,%02x\n", synth.time(), reg, val); return; }
+			auto &c = synth.cpu();
+			std::fprintf(log, "%.6f,%02x,%02x,%d:%04x,", synth.time(), reg, val, synth.rombank(), c.ppc());
+			for (int k = 0; k < 6; k++)
+			{
+				uint16_t a = uint16_t(c.sp() + 1 + 2 * k);
+				std::fprintf(log, "%02x%02x ", synth.peek(a), synth.peek(uint16_t(a + 1)));
+			}
+			std::fprintf(log, "\n");
+		};
+	}
+	struct TraceCtx { TX81Z *s; FILE *f; double t0, t1; } tctx{ &synth, nullptr, trace_t0, trace_t1 };
+	if (!trace.empty())
+	{
+		tctx.f = std::fopen(trace.c_str(), "w");
+		synth.cpu().trace_ctx = &tctx;
+		synth.cpu().trace_fn = [](void *ctx, uint16_t pc) {
+			auto *t = static_cast<TraceCtx *>(ctx);
+			double now = t->s->time();
+			if (now < t->t0 || now > t->t1) return;
+			auto &c = t->s->cpu();
+			std::fprintf(t->f, "%d:%04x %02x %02x %04x %04x\n", t->s->rombank(), pc, c.d() >> 8, c.d() & 0xff, c.x(), c.sp());
 		};
 	}
 	synth.on_midi_out = [&](uint8_t b) {
@@ -187,6 +227,18 @@ int main(int argc, char **argv)
 		}
 
 		synth.render(l.data(), r.data(), block);
+
+		for (auto &rd : ramdumps)
+		{
+			if (rd.second.empty() || synth.time() < rd.first) continue;
+			if (FILE *f = std::fopen(rd.second.c_str(), "wb"))
+			{
+				for (int a = 0; a < 0x100; a++) std::fputc(synth.peek(uint16_t(a)), f);
+				for (int a = 0x6000; a < 0x8000; a++) std::fputc(synth.peek(uint16_t(a)), f);
+				std::fclose(f);
+			}
+			rd.second.clear();
+		}
 
 		if (!wav.empty())
 		{
@@ -227,6 +279,7 @@ int main(int argc, char **argv)
 		std::printf("wrote %s (peak %.3f)\n", wav.c_str(), peak);
 	}
 	if (log) std::fclose(log);
+	if (tctx.f) std::fclose(tctx.f);
 	if (!nvram.empty())
 	{
 		if (synth.save_nvram(nvram)) std::fprintf(stderr, "saved NVRAM to %s\n", nvram.c_str());

@@ -916,6 +916,7 @@ void hd6303x::clock_serial()
 void hd6303x::execute_one()
 {
 	pPPC = pPC;
+	if (trace_fn) trace_fn(trace_ctx, PC);
 	u8 ireg = M_RDOP(PCD);
 	PC++;
 	(this->*hd63701_insn[ireg])();

@@ -20,12 +20,12 @@ def voice(**kw):
     return v, a
 
 
-def run(v, a, notes=(), end=9.0, extra=()):
+def run(v, a, notes=(), end=9.0, extra=(), **kw):
     ev = [(LOAD, "syx", P.aced_dump(a)), (LOAD + 0.05, "syx", P.vced_dump(v))]
     for t, b in notes:
         ev.append((t, "midi", b))
     ev += list(extra)
-    return P.probe(ev, end)
+    return P.probe(ev, end, **kw)
 
 
 def load_writes(w, t0=LOAD, t1=LOAD + 0.45):

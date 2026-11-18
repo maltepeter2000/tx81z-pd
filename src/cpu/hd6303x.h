@@ -72,6 +72,14 @@ public:
 
 	// debug access
 	u16 pc() const { return m_pc.w.l; }
+	u16 ppc() const { return m_ppc.w.l; }   // address of the instruction being executed
+	u16 sp() const { return m_s.w.l; }
+	u16 x() const { return m_x.w.l; }
+	u16 d() const { return m_d.w.l; }
+	u8 cc() const { return m_cc; }
+	// optional per-instruction trace callback (debug tools only; null in normal use)
+	void (*trace_fn)(void *ctx, u16 pc) = nullptr;
+	void *trace_ctx = nullptr;
 	u8 internal_ram(u8 addr) const { return m_iram[addr & 0xff]; }
 
 	// internal RAM survives in standby on the real chip; expose for NVRAM

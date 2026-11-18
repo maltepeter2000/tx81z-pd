@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Python model of the firmware's voice -> YM2414 register logic (reference for the C++ engine).
-Uses the measured characteristics in measured.json."""
+Level, velocity, level scaling and LFO speed follow the firmware routines (addresses in the docstrings)
+with tables read from the user's ROM (romtables.py); measured.json holds what is still measured."""
 import json
 import os
 
+import romtables
+
 M = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "measured.json")))
+RT = romtables.load()   # tables from the user's ROM (not stored in the repository)
 
 # coarse 0..63 -> (MUL, DT2): all MUL x DT2 ratios, sorted, duplicates removed
 _mul = [0.5] + list(range(1, 16))
@@ -30,6 +34,12 @@ def op_fields(v, a, k):
     fix, fixr, fin, osw, sh = x
     return dict(ar=ar, d1r=d1r, d2r=d2r, rr=rr, d1l=d1l, ls=ls, rs=rs, ebs=ebs, ame=ame, kvs=kvs, out=out,
                 crs=crs, det=det, fix=fix, fixr=fixr, fin=fin, osw=osw, sh=sh)
+
+
+def lfo_rate(lfs, lfw):
+    """$9B02: LFO speed 0..99 -> register 0x18 (sample and hold uses the scaled speed directly)"""
+    d = (lfs * 0xA5 * 4 >> 8) & 0xFF
+    return d if lfw == 3 else 255 - RT["mod_att"][d]
 
 
 def slot(ch, k):
@@ -84,7 +94,7 @@ def load_writes(v, a):
         w.append((0x38 + ch, (pms << 4) | ams))
     lfw, lfs = v[59], v[54]
     w.append((0x1B, lfw))
-    w.append((0x18, M["lfs"][lfs] if lfw != 3 else None))   # S/H: own table (to measure)
+    w.append((0x18, lfo_rate(lfs, lfw)))
     for k, ch in order:
         o = ops[k]
         w.append((0xE0 + slot(ch, k), ((15 - o["d1l"]) << 4) | max(1, o["rr"])))
@@ -118,30 +128,53 @@ def keycode(s):
     return ((s // 12) << 4) | CODE[s % 12]
 
 
-def vel_att(kvs, vel):
-    if kvs == 0:
-        return 0
-    return 7 - kvs + ((kvs * M["vel_T"][vel - 1] + 8) >> 4)
+# ---- exact level path, read from the firmware (tables from the user's ROM, see romtables.py) ----
 
 
-def fold_key(key):
-    while key < 24:
-        key += 12
-    while key > 108:
-        key -= 12
-    return key
+def sat8(x):
+    return 255 if x > 255 else x
 
 
-def ls_att(ls, key):
-    if ls == 0:
-        return 0
-    return M["ls"][ls][fold_key(key) // 3 - 8]
+def op_base_att(o, alg, k):
+    """$9F00: output level -> attenuation, algorithm offset, in 1/2 TL steps"""
+    out = o["out"]
+    a = RT["out_att"][out] if out < 20 else 99 - out
+    oi = 4 - k                     # firmware operator index: 0 = OP4 ... 3 = OP1
+    if alg < 4:
+        return 2 * a               # (carrier OP1 or modulator: no offset)
+    add = {4: 8 if oi & 2 else 0, 5: 13 if oi else 0, 6: 13 if oi else 0, 7: 16}[alg]
+    if add:
+        a = min(0x7F, a + add)
+    return 2 * a
 
 
-def alg_att(alg, k):
-    return M["alg_att"]["att"][alg] if k in M["alg_att"]["ops"][alg] else 0
+def ls_curve(o, alg, k):
+    """$9F70: 29-point level scaling curve per operator (1/2 TL steps)"""
+    depth = (o["ls"] * 0xA5 * 4 >> 8) & 0xFF
+    base = op_base_att(o, alg, k)
+    return [sat8(base + ((RT["ls_curve"][i] * depth) >> 8)) for i in range(29)]
 
 
-def note_tl(o, key, vel, alg=0, k=1):
-    """key = played key + transpose - 24"""
-    return min(127, M["out_tl"][o["out"]] + alg_att(alg, k) + vel_att(o["kvs"], vel) + ls_att(o["ls"], key))
+def ls_index(key, trps):
+    """$A18C: key -> curve index"""
+    b = key - 13 + trps - 24
+    while b < 0:
+        b += 12
+    while b >= 0x60:
+        b -= 12
+    g = RT["key_group"][b] - 14
+    g = min(max(g, 0), 0x70)
+    return g >> 2
+
+
+def note_level(o, key, trps, vel, alg, k):
+    """$A155: per-note level (RAM $78A3), 1/2 TL steps"""
+    kvs = o["kvs"]
+    lo, mul = (15 - 2 * kvs, 32 * kvs) if kvs else (0, 0)
+    v = sat8(lo + ((mul * RT["vel"][vel]) >> 8))
+    return sat8(v + ls_curve(o, alg, k)[ls_index(key, trps)])
+
+
+def note_tl(o, key, trps, vel, alg, k, mod=0):
+    """TL register value written at note on (mod = RAM $7873, 0 without modulation)"""
+    return sat8(note_level(o, key, trps, vel, alg, k) + mod) >> 1

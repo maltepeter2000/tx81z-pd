@@ -13,13 +13,20 @@ ROM = os.environ.get("TX_ROM", "/tmp/claude-0/-home-claude/0880ee1e-15a1-5b3f-a6
 NVRAM = os.environ.get("TX_NVRAM", "/tmp/claude-0/-home-claude/0880ee1e-15a1-5b3f-a614-450e24afd090/scratchpad/nat/base.nvram")
 
 
-def probe(events, seconds, nvram=NVRAM):
+def probe(events, seconds, nvram=NVRAM, pc=False, trace=None, ramdump=()):
+    """pc=True: entries get a 4th field "bank:pc stack..."; trace=(t0, t1, file) writes an instruction trace"""
     with tempfile.TemporaryDirectory() as d:
         nv = os.path.join(d, "t.nvram")
         with open(nvram, "rb") as f, open(nv, "wb") as g:
             g.write(f.read())
         log = os.path.join(d, "log.csv")
         args = [EMU, "--rom", ROM, "--nvram", nv, "--seconds", str(seconds), "--quiet", "--opzlog", log]
+        if pc:
+            args.append("--opzpc")
+        for t, fn in ramdump:      # RAM image file: $00-$FF then $6000-$7FFF
+            args += ["--ramdump", f"{t}:{fn}"]
+        if trace:
+            args += ["--trace", trace[2], str(trace[0]), str(trace[1])]
         for k, (t, kind, data) in enumerate(events):
             if kind == "midi":
                 args += ["--midi", f"{t}:" + " ".join(f"{b:02X}" for b in data)]
@@ -30,14 +37,15 @@ def probe(events, seconds, nvram=NVRAM):
         subprocess.run(args, capture_output=True, check=True)
         out = []
         for ln in open(log).read().splitlines()[1:]:
-            t, r, v = ln.split(",")
-            out.append((float(t), int(r, 16), int(v, 16)))
+            f = ln.split(",")
+            e = (float(f[0]), int(f[1], 16), int(f[2], 16))
+            out.append(e + (f[3] + " " + f[4],) if pc else e)
         return out
 
 
 def image(writes, t):
     img = {}
-    for tt, r, v in writes:
+    for tt, r, v, *_ in writes:
         if tt >= t:
             break
         img[r] = v
@@ -45,7 +53,7 @@ def image(writes, t):
 
 
 def between(writes, t0, t1):
-    return [(t, r, v) for t, r, v in writes if t0 <= t < t1]
+    return [e for e in writes if t0 <= e[0] < t1]
 
 
 def vced_dump(v, ch=0):
