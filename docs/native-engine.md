@@ -192,6 +192,27 @@ Tests with mono voices, mode switches and all notes off: `MONO=1 CHMODE=1 test_c
 Not ported: micro tuning (`$7F99`), performance mode. CC 6 (data entry) and aftertouch are ignored by
 the firmware in single mode as well.
 
+## Parameter changes (`Engine::set_param`)
+
+As the firmware's SysEx parameter change: the value is stored in the voice copy, then the register
+blocks that depend on it are rewritten for all 4 operators x 8 channels and the derived RAM is
+recomputed; sounding notes go on. Operator parameters: AR, RS -> `80`; D1R, AME -> `A0`; D2R -> `C0`;
+RR, D1L -> `E0`; CRS, FIX, FIXRG, FINE -> `80`, `40`, `40` alt, `C0`; OSW -> `40`, `40` alt, `C0`;
+DET -> `40`; SHFT, reverb rate -> `C0` alt; LS, OUT, KVS, EBS -> RAM only (levels apply from the next
+note). Algorithm and poly / mono damp all voices and reset them (as the firmware); feedback -> `20`;
+LFO and wheel / breath / foot sensitivities -> `1B`, `18`; PMS, AMS -> `38`. The firmware takes no
+change of portamento mode, the DX21 switches (sustain, portamento, chorus) or the OP1 EG shift this way.
+Fine is clamped to 7 below ratio 1 only by a voice load, not by a parameter change.
+`tools/native/test_cpp_params.py`: every parameter against the firmware, 13 seeds x 100 parameters exact.
+
+## Single mode specialisation
+
+All channels belong to instrument 0 on LFO 1, LFO 2 is unused: the timer task uses these as constants,
+the software LFO (`$AAF7`, only for the performance 'vib' setting) and the LFO delay of LFOs 2..8 are
+left out, LFO 2 writes its constant depths (`17` = 00 / 80). The main RAM variables have names
+(`RAM_...` in `txnative.cpp`). Register output unchanged (`test_cpp_port.py`, RAM compared without the
+dropped state).
+
 ## CPU on the Bela Gem (Cortex-A53, 64 bit)
 
 60 s of audio rendered without output (`txnative-cli` / `tx81z-emu`, same voices; firmware loads them by

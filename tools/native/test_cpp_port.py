@@ -15,6 +15,9 @@ import verify_cpp as C
 
 RAMN = 0x100 + 0x2000
 SKIP = set(range(0x7E0C, 0x7EE8)) | set(range(T.STACK, 0x8000))
+# state the single-mode engine does not keep: software LFO ($7836 phase, $776A, $77B6 output) and the
+# LFO delay of LFOs 2..8
+SKIP |= set(range(0x7836, 0x7846)) | {0x776A} | set(range(0x77B6, 0x77C6)) | set(range(0x7798, 0x77A6)) | set(range(0x77A8, 0x77B6))
 
 
 def run(seed):

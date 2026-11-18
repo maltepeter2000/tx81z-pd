@@ -90,14 +90,12 @@ private:
 	void phase_b();
 	void bend_all();
 	int bc_bias(int ch);
-	void soft_lfo();
 	void pitch_depth();
 	void keycode();
 	void lfo_delay();
 	void channel_volume(int ch);
 	void tl_refresh();
 	void am_depth();
-	int lfo_pick(int k) const;
 
 	// notes
 	int note_level(int oi, int key, int vel) const;

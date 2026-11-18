@@ -58,6 +58,46 @@ enum : uint32_t
 	T_EBS = 0x9D89, T_LFO16 = 0x9B6D, T_PORT = 0xA06D, T_PBR = 0xA0E4, T_BEND = 0xA4B8, T_BCPB = 0xA485,
 
 	VOICE = 0x6A67,
+
+	// RAM variables of the firmware (CPU addresses; per channel arrays have 8 entries, per slot 32)
+	RAM_CTRL_FLAGS = 0x41,          // bit 7 sustain pedal, bit 6 portamento switch (CC 65)
+	RAM_SUSTAIN_WAS = 0x49,         // sustain state seen last
+	RAM_MASTER_TUNE = 0x86,         // 16 bit, 1/256 semitone
+	RAM_LFO_DELAY_WAIT = 0x7796,    // 16 bit, LFO 1
+	RAM_LFO_DELAY_ENV = 0x77A6,     // 16 bit, LFO 1 (high byte = delay envelope)
+	RAM_PORT_RATE = 0x77C6,         // per channel, FF = off
+	RAM_LFO_DELAY_RATE = 0x780E,    // 16 bit per channel
+	RAM_LFO_SYNC = 0x782E,          // per channel
+	RAM_LFO_WAVE = 0x7852,
+	RAM_EBS = 0x7853,               // per slot: EG bias sensitivity
+	RAM_MOD_ATT = 0x7873,           // per slot: modulation attenuation (TL refresh)
+	RAM_CHVOL = 0x7893,             // 16 bit per channel: channel volume value (register 00+ch)
+	RAM_NOTE_LEVEL = 0x78A3,        // per slot: level of the note, half TL steps
+	RAM_BEND = 0x78C3,              // 16 bit per channel: pitch bend + breath pitch bias
+	RAM_R20 = 0x7913,               // per channel: register 20 value (without key on)
+	RAM_TRANSPOSE = 0x791B,         // per channel: transpose - 24
+	RAM_PBR = 0x7923,               // per channel: pitch bend range code
+	RAM_BCPB = 0x792B,              // per channel: breath pitch bias - 50
+	RAM_PITCH_TARGET = 0x7CF3,      // 16 bit per channel
+	RAM_PITCH_CUR = 0x7D03,         // 16 bit per channel (glide position)
+	RAM_AMD = 0x7D13,               // LFO 1 AM depth, scaled
+	RAM_MWA = 0x7D15,
+	RAM_BCA = 0x7D17,
+	RAM_FCA = 0x7D19,
+	RAM_FC_VOLUME = 0x7D1B,         // per channel
+	RAM_EG_BIAS_NOW = 0x7D23,       // per channel: EG bias amount after breath
+	RAM_VOL_ATT = 0x7D2B,           // per channel: volume attenuation (carriers)
+	RAM_EG_BIAS = 0x7D33,           // per channel: BC EG bias, scaled
+	RAM_MW_PITCH = 0x7D3B,          // per channel
+	RAM_BC_PITCH = 0x7D43,          // per channel
+	RAM_FC_PITCH = 0x7D4B,          // per channel
+	RAM_MOD_WHEEL = 0x7D53,         // controller values (instrument 0)
+	RAM_BREATH = 0x7D5B,
+	RAM_FOOT = 0x7D63,
+	RAM_VOLUME = 0x7D6B,            // MIDI volume as attenuation
+	RAM_PITCH_DEPTH = 0x7D73,       // per channel: controller pitch depth
+	RAM_PMD = 0x7D7B,               // per channel: PM depth, scaled
+	RAM_BEND_VALUE = 0x7D83,        // MIDI bend MSB * 2
 };
 
 } // namespace
@@ -618,20 +658,10 @@ void Engine::set_mono(bool mono)
 // $A210: key code / fraction of the new voice right away (from the glide start when gliding)
 void Engine::note_keycode(int c)
 {
-	int inst = r(0x793B + c);
-	uint32_t vx = VOICE + uint32_t(inst >= 8 ? 0 : inst) * 0x6E;
-	bool glide;
-	if (r(vx + 0x3F) && r(vx + 0x41)) glide = true;
-	else glide = !(inst & 0x80) && (r(0x41 + inst) & 0x40);
-	if (glide && r(0x77C6 + c) == 0xff) glide = false;
-	int base = r16((glide ? 0x7D03 : 0x7CF3) + 2 * c);
-	auto add_clamped = [](int d, int x) {
-		int sd = int16_t(d), sx = int16_t(x);
-		if (sd + sx < -0x8000 || sd + sx > 0x7fff) return (d + x > 0xffff) ? 0x0000 : 0x7fff;
-		return (d + x) & 0xffff;
-	};
-	int d = add_clamped(r16(0x86), r16(0x78C3 + 2 * c));
-	if (c != 0 || (r(0x7846) & 3) == 3) d = add_clamped(d, r16(0x77B6 + 2 * c));
+	bool glide = ((vp(63) && vp(65)) || (r(RAM_CTRL_FLAGS) & 0x40)) && r(RAM_PORT_RATE + c) != 0xff;
+	int base = r16((glide ? RAM_PITCH_CUR : RAM_PITCH_TARGET) + 2 * c);
+	int d = int16_t(r16(RAM_MASTER_TUNE)) + int16_t(r16(RAM_BEND + 2 * c));   // added with clamping here
+	d = d < -0x8000 ? 0x0000 : d > 0x7fff ? 0x7fff : d & 0xffff;
 	write_keycode(c, d, base);
 }
 
@@ -739,7 +769,6 @@ void Engine::pitch_bend(int value14)
 void Engine::phase_a()
 {
 	bend_all();
-	soft_lfo();
 	pitch_depth();
 	keycode();
 }
@@ -814,142 +843,84 @@ int Engine::bc_bias(int ch)
 	return d;
 }
 
-// $AAF7
-void Engine::soft_lfo()
-{
-	for (int b = 0; b < 8; b++)
-	{
-		if (b != 0 && (r(0x7846 + b) & 3) != 3) { w16(0x77B6 + 2 * b, 0); continue; }
-		int ph = (r16(0x7836 + 2 * b) + r16(0x781E + 2 * b)) & 0xffff;
-		w16(0x7836 + 2 * b, ph);
-		int a = (ph >> 7) & 0xff;
-		if (ph & 0x8000) a = (~a) & 0xff;
-		if (b == 0) w(0x776A, a);
-		int lv = (a + 0x80) & 0xff;
-		int dep = r(0x7D7B + b) + r(0x7D73 + b);
-		if ((dep & 0xff) == 0) { w16(0x77B6 + 2 * b, 0); continue; }
-		dep = sat8(dep);
-		int k = hi(dep, r(0x77A6 + 2 * b));
-		int d = !(lv & 0x80) ? lv * k : (((~(((-lv) & 0xff) * k)) & 0xffff) + 1) & 0xffff;
-		int h = (d >> 8) & 0xff;
-		d = ((h & 0x80) ? 0xff00 : 0) | h;
-		w16(0x77B6 + 2 * b, (d << 1) & 0xffff);
-	}
-}
+// Single mode specialisation of the timer task. The firmware's general code serves 8 instruments and
+// two LFOs; in single mode all channels belong to instrument 0 on LFO 1 and LFO 2 is unused, so the
+// instrument / LFO look-ups are constants here and the software LFO ($AAF7, only for the performance
+// 'vib' setting) is left out. Register output is unchanged (test_cpp_port.py).
 
-int Engine::lfo_pick(int k) const
-{
-	int b = r(0x7850);
-	if (b == 0 || b == 0xff) return r(k == 0 ? 0x784E : 0x784F);
-	return r(k == 0 ? 0x784F : 0x784E);
-}
-
-// $AA1A
+// $AA1A: controller pitch depth per channel ($7D73), then the PM depth (19 for LFO 1, 17 for LFO 2)
 void Engine::pitch_depth()
 {
 	const int half = r(0x91) ? 4 : 0;
 	w(0x92, half);
-	for (int c = 0; c < 4; c++)
+	for (int ch = half; ch < half + 4; ch++)
 	{
-		int ch = c + half, inst = r(0x793B + ch);
-		if (inst & 0x80) continue;
-		int mw = hi(r(0x7D3B + ch), r(0x7D53 + inst));
-		w(0x7D73 + ch, mw);
-		int fc = hi(r(0x7D4B + ch), r(0x7D63 + inst));
-		int bc = hi(r(0x7D43 + ch), r(0x7D5B + inst));
+		int mw = hi(r(RAM_MW_PITCH + ch), r(RAM_MOD_WHEEL));
+		int fc = hi(r(RAM_FC_PITCH + ch), r(RAM_FOOT));
+		int bc = hi(r(RAM_BC_PITCH + ch), r(RAM_BREATH));
 		int a = bc + fc;
-		a = a > 0xff ? 0xff : sat8(a + mw);
-		w(0x7D73 + ch, a);
+		w(RAM_PITCH_DEPTH + ch, a > 0xff ? 0xff : sat8(a + mw));
 	}
-	const int k = r(0x91) ? 1 : 0;
-	int sel = r(k == 0 ? 0x7850 : 0x7851), a = 0;
-	if (!(sel & 0x80))
-	{
-		a = hi(r(0x7D7B + sel), r(0x77A6 + 2 * sel));
-		int b = lfo_pick(k);
-		if (!(b & 0x80)) a = sat8(a + r(0x7D73 + r(0x7EF1 + b)));
-	}
-	write(k == 0 ? 0x19 : 0x17, uint8_t((a >> 1) | 0x80));
+	if (half)
+		write(0x17, 0x80);
+	else
+		write(0x19, uint8_t((sat8(hi(r(RAM_PMD), r(RAM_LFO_DELAY_ENV)) + r(RAM_PITCH_DEPTH)) >> 1) | 0x80));
 }
 
-// $A538
+// $A538: portamento and key code / fraction of channels 7..0
 void Engine::keycode()
 {
+	const bool glide = (vp(63) && vp(65)) || (r(RAM_CTRL_FLAGS) & 0x40);   // mono fingered, or CC 65
 	for (int ch = 7; ch >= 0; ch--)
 	{
-		const uint32_t p = 0x7CF3 + 2 * ch;
-		int inst = r(0x793B + ch);
-		bool glide;
-		uint32_t vx = VOICE + uint32_t(inst >= 8 ? 0 : inst) * 0x6E;   // $9A07
-		if (r(vx + 0x3F) && r(vx + 0x41)) glide = true;
-		else glide = !(inst & 0x80) && (r(0x41 + inst) & 0x40);
+		const uint32_t p = RAM_PITCH_TARGET + 2 * ch;
 		int tgt = r16(p), cur = r16(p + 0x10);
-		if (!glide) cur = tgt;
+		int rate = r(RAM_PORT_RATE + ch);
+		int diff = (tgt - cur) & 0xffff;
+		if (!glide || diff == 0 || rate == 0xff) cur = tgt;
+		else if (!(diff & 0x8000))
+		{
+			int n = (((((diff >> 8) >> 2) + 1) * rate) + cur) & 0xffff;
+			cur = n < tgt ? n : tgt;
+		}
 		else
 		{
-			int diff = (tgt - cur) & 0xffff, rate = r(0x77C6 + ch);
-			if (diff == 0 || rate == 0xff) cur = tgt;
-			else if (!(diff & 0x8000))
-			{
-				int n = (((((diff >> 8) >> 2) + 1) * rate) + cur) & 0xffff;
-				cur = n < tgt ? n : tgt;
-			}
-			else
-			{
-				int n = (cur - (((((-(diff >> 8)) & 0xff) >> 2) + 1) * rate)) & 0xffff;
-				cur = n >= tgt ? n : tgt;
-			}
+			int n = (cur - (((((-(diff >> 8)) & 0xff) >> 2) + 1) * rate)) & 0xffff;
+			cur = n >= tgt ? n : tgt;
 		}
 		w16(p + 0x10, cur);
-		int d = (r16(0x86) + r16(0x78C3 + 2 * ch)) & 0xffff;
-		if (ch != 0 || (r(0x7846) & 3) == 3)
-		{
-			int x = r16(0x77B6 + 2 * ch);
-			int sd = int16_t(d), sx = int16_t(x);
-			if (sd + sx < -0x8000 || sd + sx > 0x7fff) d = (d + x > 0xffff) ? 0x0000 : 0x7fff;
-			else d = (d + x) & 0xffff;
-		}
-		write_keycode(ch, d, cur);
+		write_keycode(ch, (r16(RAM_MASTER_TUNE) + r16(RAM_BEND + 2 * ch)) & 0xffff, cur);
 	}
 }
 
-// $A64D
+// $A64D: LFO delay, wait ($7796) then ramp ($77A6), for LFO 1
 void Engine::lfo_delay()
 {
-	for (int b = 0; b < 8; b++)
-	{
-		int rate = r16(0x780E + 2 * b);
-		int d = std::min(0xffff, r16(0x7796 + 2 * b) + rate);
-		w16(0x7796 + 2 * b, d);
-		if (d != 0xffff) continue;
-		w16(0x77A6 + 2 * b, std::min(0xffff, r16(0x77A6 + 2 * b) + rate));
-	}
+	int rate = r16(RAM_LFO_DELAY_RATE);
+	int d = std::min(0xffff, r16(RAM_LFO_DELAY_WAIT) + rate);
+	w16(RAM_LFO_DELAY_WAIT, d);
+	if (d == 0xffff) w16(RAM_LFO_DELAY_ENV, std::min(0xffff, r16(RAM_LFO_DELAY_ENV) + rate));
 }
 
-// $A69B
+// $A69B: EG bias amount (reduced by breath), foot volume and MIDI volume; register 00+ch
 void Engine::channel_volume(int ch)
 {
-	int inst = r(0x793B + ch);
-	if (inst & 0x80) return;
-	int br = r(0x7D5B + inst);
-	w(0x7D23 + ch, r(0x7D33 + ch) - hi(r(0x7D33 + ch), br));
-	int fcv = r(0x7D1B + ch);
-	w(0x7D2B + ch, hi(fcv, r(0x7D63 + inst)));
-	int a = ((fcv - r(0x7D2B + ch)) & 0xff) + r(0x7D6B + inst);
-	a = (~sat8(a)) & 0xff;
-	a = r(T_ATT + a) + r(T_ATT + ((~r(0x776D)) & 0xff));
-	if (a > 0xff) a = 0xff;
-	else if (r(0x776B) & 2) a = sat8(a + r(T_ATT + ((~r(0x7753 + inst)) & 0xff)));
-	w(0x7D2B + ch, a);
-	int nv = a + r(T_ATT + ((~r(0x7D23 + ch)) & 0xff));
-	int old = r16(0x7893 + 2 * ch);
-	w16(0x7893 + 2 * ch, nv);
+	const int bias = r(RAM_EG_BIAS + ch);
+	w(RAM_EG_BIAS_NOW + ch, bias - hi(bias, r(RAM_BREATH)));
+	const int fcv = r(RAM_FC_VOLUME + ch);
+	const int fv = hi(fcv, r(RAM_FOOT));
+	int a = ((fcv - fv) & 0xff) + r(RAM_VOLUME);
+	a = r(T_ATT + ((~sat8(a)) & 0xff));                  // + att[~master volume] = att[255] = 0
+	w(RAM_VOL_ATT + ch, a);
+	int nv = a + r(T_ATT + ((~r(RAM_EG_BIAS_NOW + ch)) & 0xff));
+	int old = r16(RAM_CHVOL + 2 * ch);
+	w16(RAM_CHVOL + 2 * ch, nv);
 	if (old == nv) return;
 	int diff = old > nv ? old - nv : nv - old;
 	write(uint8_t(ch), diff >= 0x20 ? 0 : r(T_VOLDIFF + diff));
 }
 
-// $A769
+// $A769: TL of 4 channels x 4 operators (the half alternates): note level + modulation
 void Engine::tl_refresh()
 {
 	if (r(0x91) == 0) { w(0x91, 0xff); w(0x92, 0); }
@@ -959,37 +930,24 @@ void Engine::tl_refresh()
 		for (int c = 3; c >= 0; c--)
 		{
 			int ch = c + half, s = slot(ch, oi);
-			int a = r(T_ATT + ((~hi(r(0x7853 + s), r(0x7D23 + ch))) & 0xff));
-			int alg = r(0x7913 + ch) & 7, bb = alg - 4;
+			int a = r(T_ATT + ((~hi(r(RAM_EBS + s), r(RAM_EG_BIAS_NOW + ch))) & 0xff));
+			int bb = (r(RAM_R20 + ch) & 7) - 4;
 			bool car = bb < 0 ? oi == 3 : bb == 0 ? (oi & 2) != 0 : bb < 3 ? oi != 0 : true;
-			if (car) a = sat8(a + r(0x7D2B + ch));
-			w(0x7873 + s, a);
-			int t = sat8(a + r(0x78A3 + s));
-			int bit7 = ((r(0x776B) & 2) && r(0x7767)) ? 0 : 0x80;
-			write(uint8_t(0x60 + s), uint8_t(bit7 | (t >> 1)));
+			if (car) a = sat8(a + r(RAM_VOL_ATT + ch));
+			w(RAM_MOD_ATT + s, a);
+			write(uint8_t(0x60 + s), uint8_t(0x80 | (sat8(a + r(RAM_NOTE_LEVEL + s)) >> 1)));
 		}
 }
 
-// $A94B
+// $A94B: AM depth (19 for LFO 1, 17 for LFO 2)
 void Engine::am_depth()
 {
-	const int k = r(0x91) ? 1 : 0;
-	const int b = lfo_pick(k);
-	int f2 = hi(r(0x7D15 + k), r(0x7D53 + b));
-	int f3 = hi(r(0x7D17 + k), r(0x7D5B + b));
-	int f5 = hi(r(0x7D19 + k), r(0x7D63 + b));
-	int s = f2 + f3;
-	s = s > 0xff ? 0xff : sat8(s + f5);
-	int sel = r(0x7850 + k);
-	int dly = (sel & 0x80) ? 0 : r(0x77A6 + sel);
-	int a = sat8(hi(r(0x7D13 + k), dly) + s);
-	a = r(T_ATT + ((~a) & 0xff));
-	if (!(sel & 0x80))
-	{
-		int bias = r(0x7873 + sel);
-		a = (sat8(a + bias) - bias) & 0xff;
-	}
-	write(k == 0 ? 0x19 : 0x17, uint8_t(a >> 1));
+	if (r(0x91)) { write(0x17, 0x00); return; }
+	int s = hi(r(RAM_MWA), r(RAM_MOD_WHEEL)) + hi(r(RAM_BCA), r(RAM_BREATH));
+	s = s > 0xff ? 0xff : sat8(s + hi(r(RAM_FCA), r(RAM_FOOT)));
+	int a = r(T_ATT + ((~sat8(hi(r(RAM_AMD), r(RAM_LFO_DELAY_ENV)) + s)) & 0xff));
+	const int bias = r(RAM_MOD_ATT);
+	write(0x19, uint8_t(((sat8(a + bias) - bias) & 0xff) >> 1));
 }
 
 void Engine::render(float *left, float *right, int n)
