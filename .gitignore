@@ -16,3 +16,6 @@ build/
 *.csv
 .DS_Store
 __pycache__/
+tools/native/*.json
+tools/native/*.txt
+!tools/native/basevoice.txt
