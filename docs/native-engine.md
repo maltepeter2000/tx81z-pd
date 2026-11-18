@@ -70,7 +70,9 @@ where CPU address = file offset.
 | `$A769` | every tick, 4 channels x 4 operators (alternating halves): TL = (`$78A3` + modulation `$7873`) / 2, bit 7 set |
 | `$A68F` | every tick: channel volume registers `00-07` (BC EG bias, controllers) |
 | `$9B02` | LFO speed -> `18` (`16` for the second LFO) |
-| `$A53F` | every tick: key code / fraction `28-37` |
+| `$A53F` | key code / fraction `28-37` (every second tick) |
+| `$8F1F` | tick: always `$EC17`, `$E8D0`, `$ABC7`; then alternating `$A390`, `$AAF7`, `$AA1A`, `$A538` (key code) and `$A64D`, `$A68F` (channel volume, TL refresh), `$A94B` |
+| `$82BA` / `$8596` | note on / note off, voice allocation |
 | `$CC86` | MIDI velocity -> velocity factor (RAM `$F1`) |
 
 Levels are kept in **half TL steps** (8 bit, saturating at 255) and halved only when written; this is
@@ -114,8 +116,17 @@ Rules:
 - BC EG bias -> `00-07` (channel volume) is still a measured table in `tools/native/measured.json`;
   ymfm does not use these registers, so they do not change the sound
 
+## Note on / off (single mode, poly; `tools/native/verify_notes.py`: 340 / 340 random sequences exact)
+
+- voices are taken round robin, starting after the voice used last; a held voice is skipped; when all 8
+  are held, the oldest held note is stolen (queue in note-on order, note off removes the voice from it);
+  a voice load resets the voices and starts again at voice 0
+- note on, voice c: `E0+c+8i = FE` and `C0+c+8i` alt = shadow & `E8` (keeps EG shift) for i = 0..3,
+  `08 = c`, TL `60+c+8i` (bit 7 clear), `1B = 10 | wave` if LFO sync is on, `20+c = 40 | 80 | FB | ALG`
+- note off (also note on with velocity 0): `08 = c`, `20+c` without the key on bit
+- key code is not written at note on; the next periodic update writes it
+
 ## Next
 
-- note on / off sequence and voice allocation (8 voices), key on bit in `20-27`
 - per tick: TL modulation (`$7873`: AMS / breath / EG bias), LFO delay and depths (`17`, `19`),
   pitch bend, portamento, mono, controllers, sustain

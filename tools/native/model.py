@@ -178,3 +178,56 @@ def note_level(o, key, trps, vel, alg, k):
 def note_tl(o, key, trps, vel, alg, k, mod=0):
     """TL register value written at note on (mod = RAM $7873, 0 without modulation)"""
     return sat8(note_level(o, key, trps, vel, alg, k) + mod) >> 1
+
+
+# ---- note on / off and voice allocation (single mode, poly), read from the firmware ----
+
+class Voices:
+    """One instance per voice load (the firmware resets the voices on a load).
+    $82BA note on, $8596 note off. Voices are taken round robin starting after the last one used
+    (RAM $7EE9); a held voice is skipped; when all are held the oldest held note is stolen (queue $E7-$EE,
+    in note-on order; note off removes a voice from it)."""
+
+    def __init__(self, v, a, n=8):
+        self.v, self.a, self.n = v, a, n
+        self.next = 0
+        self.key = [None] * n
+        self.queue = []
+        lw = load_writes(v, a)
+        self.c_alt = {}
+        for r, x in lw:
+            if 0xC0 <= r <= 0xDF and x & 0x20:
+                self.c_alt[r - 0xC0] = x
+        self.r20 = 0x80 | (v[53] << 3) | v[52]
+
+    def note_on(self, key, vel):
+        if vel == 0:
+            return self.note_off(key)
+        v, a = self.v, self.a
+        for i in range(self.n):
+            c = (self.next + i) % self.n
+            if self.key[c] is None:
+                break
+        else:
+            c = self.queue.pop(0)
+        w = [(0xE0 + c + 8 * oi, 0xFE) for oi in range(4)]
+        w += [(0xC0 + c + 8 * oi, self.c_alt[c + 8 * oi] & 0xE8) for oi in range(4)]
+        w.append((0x08, c))
+        self.key[c] = key
+        self.queue.append(c)
+        self.next = (c + 1) % self.n
+        for oi in range(4):
+            k = 4 - oi
+            w.append((0x60 + c + 8 * oi, note_tl(op_fields(v, a, k), key, v[62], vel, v[52], k)))
+        if v[58]:                                   # LFO sync ($8525)
+            w.append((0x1B, 0x10 | v[59]))
+        w.append((0x20 + c, 0x40 | self.r20))
+        return w
+
+    def note_off(self, key):
+        for c in range(self.n):
+            if self.key[c] == key:
+                self.key[c] = None
+                self.queue.remove(c)
+                return [(0x08, c), (0x20 + c, self.r20)]
+        return []
