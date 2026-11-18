@@ -5,6 +5,7 @@
 //                [--midi S:HEX...] [--phase N[b]] [--opzlog FILE] [--wav FILE]      (WAV at 48 kHz, resampled like tx81z-emu)
 // VOICE.bin = 93 VCED bytes followed by 23 ACED bytes.
 #include "txnative.h"
+#include "ymfm_opz.h"   // unmodified ymfm, reference for --check-ymfm
 
 #include <cmath>
 #include <cstdio>
@@ -46,6 +47,7 @@ int main(int argc, char **argv)
 	double seconds = 2.0, load_at = 0.0;
 	int phase_next = -1;
 	std::string phase_test, phase_out;
+	bool check_ymfm = false;
 	double dump_t = -1;
 	std::string dump_f;
 	bool phase_b = true;
@@ -61,6 +63,7 @@ int main(int argc, char **argv)
 		else if (a == "--opzlog") opzlog = next();
 		else if (a == "--wav") wav = next();
 		else if (a == "--ramdump") { std::string s = next(); auto c = s.find(':'); dump_t = std::atof(s.substr(0, c).c_str()); dump_f = s.substr(c + 1); }
+		else if (a == "--check-ymfm") check_ymfm = true;
 		else if (a == "--phase-test") { phase_test = next(); phase_out = next(); }
 		else if (a == "--phase") { std::string s = next(); phase_next = std::atoi(s.c_str()); phase_b = s.find('b') != std::string::npos; }
 		else if (a == "--midi")
@@ -117,11 +120,17 @@ int main(int argc, char **argv)
 	const double rate = eng.sample_rate();
 	uint64_t pos = 0;
 	FILE *log = opzlog.empty() ? nullptr : std::fopen(opzlog.c_str(), "w");
-	if (log)
-	{
-		std::fprintf(log, "time_s,reg,val\n");
-		eng.on_write = [&](uint8_t r, uint8_t v) { std::fprintf(log, "%.6f,%02x,%02x\n", pos / rate, r, v); };
-	}
+	if (log) std::fprintf(log, "time_s,reg,val\n");
+	// --check-ymfm: the unmodified ymfm gets the same register writes; outputs must be equal
+	ymfm::ymfm_interface ref_if;
+	ymfm::ym2414 ref(ref_if);
+	ref.reset();
+	uint64_t mismatches = 0, first_mismatch = 0;
+	if (log || check_ymfm)
+		eng.on_write = [&](uint8_t r, uint8_t v) {
+			if (log) std::fprintf(log, "%.6f,%02x,%02x\n", pos / rate, r, v);
+			if (check_ymfm) { ref.write(0, r); ref.write(1, v); }
+		};
 	std::string err;
 	if (!eng.init(romdata.data(), romdata.size(), err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
 	if (phase_next >= 0) eng.set_phase(phase_next, phase_b);
@@ -152,6 +161,13 @@ int main(int argc, char **argv)
 			}
 		}
 		eng.render(&l, &r, 1);
+		if (check_ymfm)
+		{
+			ymfm::ym2414::output_data o;
+			ref.generate(&o);
+			if (o.data[0] != eng.last_raw(0) || o.data[1] != eng.last_raw(1))
+				if (!mismatches++) first_mismatch = pos;
+		}
 		if (!dump_f.empty() && t >= dump_t)
 		{
 			// same layout as tx81z-emu --ramdump: $00-$FF, then $6000-$7FFF
@@ -178,6 +194,13 @@ int main(int argc, char **argv)
 		}
 	}
 	if (log) std::fclose(log);
+	if (check_ymfm)
+	{
+		std::printf("check-ymfm: %llu samples, %llu differ", (unsigned long long)total, (unsigned long long)mismatches);
+		if (mismatches) std::printf(" (first at sample %llu)", (unsigned long long)first_mismatch);
+		std::printf("\n");
+		if (mismatches) return 2;
+	}
 	if (!wav.empty()) write_wav(wav, pcm, 48000);
 	return 0;
 }

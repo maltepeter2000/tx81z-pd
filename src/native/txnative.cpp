@@ -872,7 +872,7 @@ void Engine::am_depth()
 
 void Engine::render(float *left, float *right, int n)
 {
-	ymfm::ym2414::output_data out;
+	ymfmx::ym2414::output_data out;
 	for (int i = 0; i < n; i++)
 	{
 		if (m_ready && ++m_phase_pos >= PHASE)
@@ -882,6 +882,8 @@ void Engine::render(float *left, float *right, int n)
 			m_phase_b = !m_phase_b;
 		}
 		m_opz.generate(&out);
+		m_last_raw[0] = out.data[0];
+		m_last_raw[1] = out.data[1];
 		float l = float(out.data[0]) * (0.60f / 32768.0f);
 		float rr = float(out.data[1]) * (0.60f / 32768.0f);
 		if (left) left[i] = std::clamp(l, -1.0f, 1.0f);

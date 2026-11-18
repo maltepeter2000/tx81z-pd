@@ -13,11 +13,11 @@
 #include <string>
 #include <vector>
 
-#include "ymfm_opz.h"
+#include "opz/ymfmx_opz.h"   // ymfm fork with optimisations that keep the output bit-identical
 
 namespace txn {
 
-class Engine : public ymfm::ymfm_interface
+class Engine : public ymfmx::ymfm_interface
 {
 public:
 	static constexpr uint32_t OPZ_CLOCK = 3579545;
@@ -41,6 +41,8 @@ public:
 	// every register write (for comparison with the firmware)
 	std::function<void(uint8_t reg, uint8_t val)> on_write;
 	uint8_t peek(uint16_t addr) const { return m_mem[addr]; }
+	// chip output of the last rendered sample (14-bit, before scaling), for comparisons
+	int32_t last_raw(int ch) const { return m_last_raw[ch]; }
 	// test hooks: replace the RAM ($00-$FF, $6000-$7FFF) and run one half of the timer task
 	void test_set_ram(const uint8_t *iram256, const uint8_t *xram8k)
 	{
@@ -94,9 +96,10 @@ private:
 	void note_keycode(int c);
 	void write_keycode(int c, int d, int cur);
 
-	ymfm::ym2414 m_opz;
+	ymfmx::ym2414 m_opz;
 	std::vector<uint8_t> m_mem;
 	bool m_ready = false;
+	int32_t m_last_raw[2]{};
 
 	uint8_t m_c_alt[32]{};      // C0-DF alt shadow (EG shift | 0x28 | reverb), RAM $77EE
 	uint8_t m_r20 = 0x80;
