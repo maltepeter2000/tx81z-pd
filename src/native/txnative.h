@@ -80,6 +80,16 @@ private:
 	// notes
 	int note_level(int oi, int key, int vel) const;
 	void key_off_voice(int c);
+	void damp(int c);
+	int note_pitch(int key, int c) const;
+	void start_voice(int c, int key, int vel);
+	void mono_note_on(int key, int vel);
+	void mono_note_off(int key);
+	void mono_key_off(int c);
+	void mono_off_slot(int sl);
+	void all_notes_off();
+	void set_mono(bool mono);
+	void reset_voices();
 	void set_flag(int c, int f);
 	void note_keycode(int c);
 	void write_keycode(int c, int d, int cur);

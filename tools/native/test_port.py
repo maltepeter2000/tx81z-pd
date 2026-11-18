@@ -90,7 +90,8 @@ def random_case(seed):
     V.NEUTRAL = False
     v, a = V.rand_voice(rng)
     V.NEUTRAL = NEU
-    v[63] = 0                     # poly (mono is checked separately)
+    v[63] = 1 if os.environ.get("MONO") == "1" else 0          # MONO=1: mono voices
+    v[65] = rng.randint(0, 1)
     ev, t, held = [], 8.6, []
     for _ in range(rng.randint(10, 40)):
         r = rng.random()
@@ -104,8 +105,10 @@ def random_case(seed):
         elif r < 0.7:
             ev.append((t, [0xE0, rng.randint(0, 127), rng.randint(0, 127)]))
         else:
-            cc = rng.choice((1, 2, 4, 7, 5, 64, 65))
-            ev.append((t, [0xB0, cc, rng.randint(0, 127)]))
+            ccs = (1, 2, 4, 7, 5, 64, 65) + ((123, 126, 127) if os.environ.get("CHMODE") == "1" else ())
+            cc = rng.choice(ccs)
+            val = rng.choice((0, 1)) if cc in (126, 127) else rng.randint(0, 127)
+            ev.append((t, [0xB0, cc, val]))
         t += rng.choice((0.003, 0.02, 0.05))
     return v, a, ev, t
 

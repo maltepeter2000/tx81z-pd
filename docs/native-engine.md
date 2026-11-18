@@ -157,6 +157,8 @@ port (`tools/native/fwport.py` is the Python reference with the same structure):
 | `$A94B` | `am_depth` | AM depth from AMD x delay plus wheel / breath / foot |
 | `$CE0C` | `control_change` | CC 1, 2, 4, 5 (portamento time), 7, 64 (sustain), 65 (portamento on / off) |
 | `$8596`, `$885F` | `note_off`, sustain | note off with sustain, release of sustained voices |
+| `$8406`, `$86C7`, `$8787` | `mono_note_on`, `mono_note_off` | mono mode, see below |
+| `$CF2C`, `$CF52`, `$CF84` | `all_notes_off`, `set_mono` | CC 123, CC 126 (value 1) / 127 |
 
 The timer task runs in two halves 292 samples apart (`$8F1F`): phase A = `$A390`, `$AAF7`, `$AA1A`,
 `$A538`; phase B = `$A64D`, `$A68F` (with `$A769`), `$A94B`.
@@ -175,13 +177,23 @@ Tests (firmware in the emulator as reference):
   handles a MIDI message over about a millisecond and its timer can interrupt in the middle; the native
   engine handles a message at once
 
-Not yet ported: mono mode (`$8406`, voice mode mono / fingered portamento), all notes off / mono / poly
-CCs (123, 126, 127), micro tuning (`$7F99`), performance mode. CC 6 (data entry) and aftertouch are
-ignored by the firmware in single mode as well.
+Mono mode (`$8406`): one voice (0) and a stack of up to 8 held keys (RAM `$7F39`, count `$7F01`).
+The first key starts the voice (damp, levels, key on; with fingered portamento it starts at its own
+pitch, with full time portamento it glides from where the voice is). A second key sets the direction
+(`$5B`: higher or lower than the first) and takes over legato; from the third key on only keys further
+in that direction take over. When the stack is full, the key at the other end is replaced. Releasing a
+key returns to the highest (direction up) or lowest remaining key; the last key off releases the voice
+(or keeps it with sustain). CC 126 / 127 switch the mode (damp all voices, voices reset); a CC 126 with
+a value other than 1, or a switch to the mode already set, acts as all notes off.
+
+Tests with mono voices, mode switches and all notes off: `MONO=1 CHMODE=1 test_cpp_events.py` 30 / 30,
+`CHMODE=1 test_cpp_events.py` 30 / 30, `MONO=1 CHMODE=1 test_cpp_port.py` 1 566 / 1 566 phases exact.
+
+Not ported: micro tuning (`$7F99`), performance mode. CC 6 (data entry) and aftertouch are ignored by
+the firmware in single mode as well.
 
 ## Next
 
-- mono mode and the remaining channel mode messages
 - integrate into `tx81z~` as a second engine (ROM banks A-D, internal bank from the NVRAM, user bank),
   splash text, Mac and Bela builds, CPU measurement on Bela
 - ymfm is now most of the cost; voices with the LFO running cost about 2.5 x more in ymfm than without

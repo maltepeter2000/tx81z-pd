@@ -248,7 +248,12 @@ void Engine::load_voice(const uint8_t *vced, const uint8_t *aced)
 	w(0x7852, v[59]);
 	build_levels();
 
-	// voices reset ($90D5)
+	reset_voices();
+}
+
+// $90D5
+void Engine::reset_voices()
+{
 	for (int ch = 0; ch < 8; ch++)
 	{
 		w16(0x7CF3 + 2 * ch, 0x1700);
@@ -258,6 +263,8 @@ void Engine::load_voice(const uint8_t *vced, const uint8_t *aced)
 		w(0x7CE3 + 2 * ch, 0);
 	}
 	w16(0x7F29, 0x1700);
+	for (uint32_t x = 0x7F39; x < 0x7F89; x++) w(x, 0);   // mono key stacks
+	for (int i = 0; i < 8; i++) w(0x7F01 + i, 0);          // and their counts
 	m_next = 0;
 	m_qlen = 0;
 }
@@ -284,6 +291,7 @@ int Engine::note_level(int oi, int key, int vel) const
 void Engine::note_on(int key, int vel)
 {
 	if (vel == 0) { note_off(key); return; }
+	if (r(VOICE + 63)) { mono_note_on(key, vel); return; }
 	int c = -1;
 	for (int i = 0; i < VOICES; i++)
 	{
@@ -295,11 +303,31 @@ void Engine::note_on(int key, int vel)
 		c = m_queue[0];
 		std::memmove(m_queue, m_queue + 1, sizeof(int) * --m_qlen);
 	}
+	damp(c);
+	// pitch: glide from the last note ($8363)
+	int pitch = note_pitch(key, c);
+	w16(0x7D03 + 2 * c, r16(0x7F29));
+	w16(0x7CF3 + 2 * c, pitch);
+	w16(0x7F29, pitch);
+	m_key[c] = key;
+	w(0x7CE3 + 2 * c, key);
+	set_flag(c, 0x02);
+	m_queue[m_qlen++] = c;
+	m_next = (c + 1) % VOICES;
+	start_voice(c, key, vel);
+}
+
+// $9169 + 08: damp the voice, the chip reloads its presets
+void Engine::damp(int c)
+{
 	for (int oi = 0; oi < 4; oi++) write(uint8_t(0xE0 + slot(c, oi)), 0xFE);
 	for (int oi = 0; oi < 4; oi++) write(uint8_t(0xC0 + slot(c, oi)), uint8_t(m_c_alt[slot(c, oi)] & 0xE8));
 	write(0x08, uint8_t(c));
-	// pitch: glide from the last note ($8363)
-	// $89D9: note - 13 + transpose, folded into 0..95 (8-bit signed test as in the firmware)
+}
+
+// $89D9: note - 13 + transpose, folded into 0..95 (8-bit signed test as in the firmware), << 8
+int Engine::note_pitch(int key, int c) const
+{
 	int pa = (key - 13) & 0xff, t = r(0x791B + c);
 	int sum = int8_t(pa) + int8_t(t);
 	pa = (pa + t) & 0xff;
@@ -311,17 +339,13 @@ void Engine::note_on(int key, int vel)
 		lt = (sa >= -128 && sa <= 127) ? sa < 0 : sa >= 0;
 	}
 	while (pa >= 0x60) pa -= 12;
-	int pitch = pa << 8;
-	w16(0x7D03 + 2 * c, r16(0x7F29));
-	w16(0x7CF3 + 2 * c, pitch);
-	w16(0x7F29, pitch);
-	m_key[c] = key;
-	w(0x7CE3 + 2 * c, key);
-	set_flag(c, 0x02);
-	m_queue[m_qlen++] = c;
-	m_next = (c + 1) % VOICES;
-	// LFO delay restarts ($A354)
-	if (r16(0x780E) != 0x1300) { w16(0x7796, 0); w16(0x77A6, 0); }
+	return pa << 8;
+}
+
+// $83C0: levels (with the LFO delay restart), key code, LFO sync, key on
+void Engine::start_voice(int c, int key, int vel)
+{
+	if (r16(0x780E) != 0x1300) { w16(0x7796, 0); w16(0x77A6, 0); }   // $A354
 	for (int oi = 0; oi < 4; oi++)
 	{
 		int s = slot(c, oi);
@@ -334,6 +358,139 @@ void Engine::note_on(int key, int vel)
 	if (r(0x782E + c)) write(0x1B, uint8_t(0x10 | r(0x7852)));   // LFO sync ($8525)
 	if (r(0x782E)) w16(0x7836, 0x3fff);
 	write(uint8_t(0x20 + c), uint8_t(0x40 | r(0x7913 + c)));
+}
+
+// ---- mono ($8406 note on, $86C7 note off): one voice (0), a stack of up to 8 held keys at $7F39
+// (key, flags), count $7F01, direction $5B (set: the higher key wins), last key $63
+
+void Engine::mono_note_on(int key, int vel)
+{
+	const uint32_t st = 0x7F39;
+	int cnt = r(0x7F01), a, sl = -1;
+	if (cnt == 8)
+	{
+		// full: replace the lowest key (direction up) or the highest ($84EB)
+		bool up = r(0x5B) != 0;
+		int best = up ? 0xff : 0;
+		for (int i = 0; i < 8; i++)
+		{
+			int k = r(st + 2 * i);
+			if (!k) continue;
+			if (up ? k <= best : k >= best) { best = k; sl = i; }
+		}
+		if (sl < 0) sl = r(0x7B);
+		w(0x7B, sl);
+		a = 3;
+	}
+	else
+	{
+		if (cnt == 0) sl = 0;
+		else
+			for (int i = 0; i < 8 && sl < 0; i++)
+				if (!r(st + 2 * i)) sl = i;
+		if (sl < 0) return;
+		a = ++cnt;
+		w(0x7F01, cnt);
+	}
+	w(st + 2 * sl, key);
+	w(st + 2 * sl + 1, 0x06);
+	const int c = 0;
+	if (a == 1)
+	{
+		damp(c);
+		int pitch = note_pitch(key, c);
+		w16(0x7CF3 + 2 * c, pitch);
+		if (r(VOICE + 65)) w16(0x7D03 + 2 * c, pitch);   // fingered portamento: no glide into the first key
+		start_voice(c, key, vel);
+		return;
+	}
+	if (a == 2)
+		w(0x5B, (key << 8) >= r16(st) ? 1 : 0);
+	else if (r(0x5B) ? key < r(0x63) : key >= r(0x63))
+		return;
+	w(0x63, key);
+	w16(0x7CF3 + 2 * c, note_pitch(key, c));
+}
+
+void Engine::mono_key_off(int c)
+{
+	write(0x08, uint8_t(c));
+	write(uint8_t(0x20 + c), uint8_t(r(0x7913 + c) & 0xBF));
+}
+
+void Engine::mono_note_off(int key)
+{
+	const uint32_t st = 0x7F39;
+	if (int8_t(r(0x7F01)) <= 0) return;
+	for (int i = 0; i < 8; i++)
+		if (r(st + 2 * i) == key && !((r(st + 2 * i + 1) ^ 4) & 0x7c)) { mono_off_slot(i); return; }
+}
+
+// $86E4: release stack entry sl
+void Engine::mono_off_slot(int sl)
+{
+	const uint32_t st = 0x7F39;
+	int cnt = (r(0x7F01) - 1) & 0xff;
+	w(0x7F01, cnt);
+	const int c = 0;
+	if (cnt == 0)
+	{
+		if (r(0x49) & 0x80) { w(st + 2 * sl + 1, (r(st + 2 * sl + 1) | 1) & 0xfd); return; }
+		w(st + 2 * sl + 1, 0);
+		mono_key_off(c);
+		return;
+	}
+	w16(st + 2 * sl, 0);
+	// the next key ($8787): highest when going up, else lowest
+	bool up = r(0x5B) != 0;
+	w(0x63, up ? 0 : 0xff);
+	int pick = r(0x7B);
+	for (int i = 0; i < 8; i++)
+	{
+		int k = r(st + 2 * i);
+		if (!k) continue;
+		if (up ? k >= r(0x63) : k <= r(0x63)) { w(0x63, k); pick = i; }
+	}
+	w(0x7B, pick);
+	int entry = r16(st + 2 * pick);
+	w16(0x7CF3 + 2 * c, note_pitch(entry >> 8, c));
+	if (cnt == 1)
+	{
+		w16(st + 2 * pick, 0);
+		w16(st, entry);
+	}
+}
+
+// $CF2C: all notes off (CC 123, and CC 126 / 127 that do not change the mode)
+void Engine::all_notes_off()
+{
+	if (r(VOICE + 63))
+	{
+		if (int8_t(r(0x7F01)) <= 0) return;
+		for (int i = 7; i >= 0; i--)
+			if ((r(0x7F39 + 2 * i + 1) & 0x7c) == 4) mono_off_slot(i);
+		return;
+	}
+	for (int c = 0; c < VOICES; c++)
+	{
+		if (!m_flag[c]) continue;
+		if (r(0x49) & 0x80) set_flag(c, (m_flag[c] | 1) & ~2);
+		else key_off_voice(c);
+	}
+}
+
+// $CF52 / $CF84: CC 126 (value 1) mono, CC 127 poly
+void Engine::set_mono(bool mono)
+{
+	if (bool(r(VOICE + 63)) == mono) { all_notes_off(); return; }
+	w(VOICE + 63, mono ? 1 : 0);
+	for (int c = 0; c < VOICES; c++)   // $912C: damp all voices, reload their presets
+	{
+		for (int oi = 0; oi < 4; oi++) write(uint8_t(0xE0 + slot(c, oi)), 0xFE);
+		for (int oi = 0; oi < 4; oi++) write(uint8_t(0xC0 + slot(c, oi)), uint8_t(m_c_alt[slot(c, oi)] & 0xE8));
+	}
+	for (int c = 0; c < VOICES; c++) write(0x08, uint8_t(c));
+	reset_voices();
 }
 
 // $A210: key code / fraction of the new voice right away (from the glide start when gliding)
@@ -393,6 +550,7 @@ void Engine::key_off_voice(int c)
 // $8596: the first held voice with this key; with sustain it stays sounding (bit 0)
 void Engine::note_off(int key)
 {
+	if (r(VOICE + 63)) { mono_note_off(key); return; }
 	for (int c = 0; c < VOICES; c++)
 	{
 		if (m_key[c] != key || !(m_flag[c] & 2)) continue;
@@ -425,10 +583,20 @@ void Engine::control_change(int cc, int value)
 		if (value >= 0x40) w(0x41, r(0x41) | 0x80);
 		else w(0x41, r(0x41) & 0x7f);
 		if ((r(0x49) & 0x80) && !(r(0x41) & 0x80))
-			for (int c = 0; c < VOICES; c++)
-				if (m_flag[c] & 1) key_off_voice(c);
+		{
+			if (r(VOICE + 63))
+			{
+				if (r(0x7F3A) & 1) { w(0x7F3A, 0); mono_key_off(0); }   // $88D9: stack slot 0
+			}
+			else
+				for (int c = 0; c < VOICES; c++)
+					if (m_flag[c] & 1) key_off_voice(c);
+		}
 		w(0x49, r(0x41) & 0x80);
 		break;
+	case 123: all_notes_off(); break;
+	case 126: if (value == 1) set_mono(true); else all_notes_off(); break;
+	case 127: set_mono(false); break;
 	case 65:                                                   // portamento on / off ($CEEB)
 		if (value >= 0x40) w(0x41, r(0x41) | 0x40);
 		else w(0x41, r(0x41) & 0xbf);
