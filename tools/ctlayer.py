@@ -143,8 +143,10 @@ def build(title, rows):
     mo = p.add("moses 0", 10, 1090); p.con(ts, 0, mo, 0)
     ti = p.add("t f b f", 10, 1120); p.con(mo, 1, ti, 0)
     wcur = p.add("tabwrite $0-cur", 300, 1260); wpk2 = p.add("tabwrite $0-pk", 420, 1260)
-    co = p.add("ctlout", 540, 1260)
-    p.con(ti, 2, wcur, 1); p.con(ti, 2, wpk2, 1); p.con(ti, 2, co, 1); p.con(chmax, 0, co, 2)
+    fbin, fbidx = feedback_queue(p, tb, chmax)
+    p.con(ti, 2, wcur, 1); p.con(ti, 2, wpk2, 1)
+    for w in fbidx:
+        p.con(ti, 2, w, 1)
     p.con(ti, 1, t2, 1)
     rown = p.add("tabread $0-own", 10, 1150); p.con(ti, 0, rown, 0)
     own = p.add("expr $f2 - $f1 < 0.5", 10, 1180)                 # marked in this logical time
@@ -155,9 +157,58 @@ def build(title, rows):
     # a change from elsewhere: this encoder must pick up again, the value goes to the controller
     tf = p.add("t b b", 10, 1270); p.con(sel0, 0, tf, 0)
     z = p.msg("0", 420, 1230); p.con(tf, 1, z, 0); p.con(z, 0, wpk2, 0)
-    fv2 = p.add("f", 540, 1230); p.con(ui, 1, fv2, 1); p.con(tf, 0, fv2, 0); p.con(fv2, 0, co, 0)
+    fv2 = p.add("f", 540, 1230); p.con(ui, 1, fv2, 1); p.con(tf, 0, fv2, 0); p.con(fv2, 0, fbin, 0)
     p.add("text define -k $0-map", 560, 940)
     return p, m
+
+
+FB_GAP_MS = 2   # feedback: one CC per 2 ms
+
+
+def feedback_queue(p, tb, chmax):
+    """[ctlout] with a queue: a change marks its CC, a metro sends one marked CC every FB_GAP_MS
+    (round robin, the newest value). A voice change or a sync request reports ~80 values in one
+    logical time; sent at once they overflowed the MIDI output (Bela) or the controller's input,
+    and the encoders of the later pages kept stale values (pickup then blocked them).
+    Returns (the object taking the value, the objects whose right inlet takes the cc first)."""
+    x, y = 1000, 940
+    q = p.add("t b f", x, y)
+    # value at index cc, mark cc
+    fbv = p.add("array define $0-fbv 128", x, y - 60)
+    dirty = p.add("array define $0-dirty 128", x + 200, y - 60)
+    z0 = p.msg("const 0", x + 200, y - 90); p.con(tb, 3, z0, 0); p.con(z0, 0, dirty, 0)
+    wv = p.add("tabwrite $0-fbv", x + 80, y + 30); p.con(q, 1, wv, 0)   # cc: right inlets, set first
+    one = p.msg("1", x, y + 30); p.con(q, 0, one, 0)
+    wd = p.add("tabwrite $0-dirty", x, y + 60); p.con(one, 0, wd, 0)
+    chg = p.add("change", x + 200, y + 60); p.con(one, 0, chg, 0)
+    mt = p.add(f"metro {FB_GAP_MS}", x + 200, y + 90); p.con(chg, 0, mt, 0)
+    # tick: reset found, scan up to 128 places from the last one, stop when nothing was marked
+    t3 = p.add("t b b b", x + 200, y + 120); p.con(mt, 0, t3, 0)
+    zf = p.msg("0", x + 330, y + 150)
+    found = p.add("f", x + 200, y + 330); p.con(t3, 2, zf, 0); p.con(zf, 0, found, 1)
+    n128 = p.msg("128", x + 260, y + 150); p.con(t3, 1, n128, 0)
+    un = p.add("until", x + 260, y + 180); p.con(n128, 0, un, 0)
+    ptr = p.add("f", x + 260, y + 210); p.con(un, 0, ptr, 0)
+    inc = p.add("+ 1", x + 300, y + 210); p.con(ptr, 0, inc, 0)
+    md = p.add("mod 128", x + 340, y + 210); p.con(inc, 0, md, 0); p.con(md, 0, ptr, 1)
+    tff = p.add("t f f", x + 260, y + 240); p.con(md, 0, tff, 0)
+    cur = p.add("f", x + 400, y + 300); p.con(tff, 1, cur, 1)
+    rd = p.add("tabread $0-dirty", x + 260, y + 270); p.con(tff, 0, rd, 0)
+    s1 = p.add("sel 1", x + 260, y + 300); p.con(rd, 0, s1, 0)
+    tb3 = p.add("t b b b", x + 260, y + 330); p.con(s1, 0, tb3, 0)
+    p.con(tb3, 2, un, 1)                                            # stop scanning
+    p.con(tb3, 1, cur, 0)
+    fl = p.msg("1", x + 330, y + 360); p.con(tb3, 0, fl, 0); p.con(fl, 0, found, 1)
+    p.con(t3, 0, found, 0)
+    s0 = p.add("sel 0", x + 200, y + 360); p.con(found, 0, s0, 0)
+    stop = p.msg("0", x + 200, y + 390); p.con(s0, 0, stop, 0); p.con(stop, 0, chg, 0)
+    # send: index, value -> ctlout (cc, channel set first), clear the mark
+    t4 = p.add("t f f f", x + 400, y + 360); p.con(cur, 0, t4, 0)
+    wd0 = p.add("tabwrite $0-dirty", x + 400, y + 450); p.con(t4, 2, wd0, 1)
+    co = p.add("ctlout", x + 520, y + 450); p.con(t4, 2, co, 1); p.con(chmax, 0, co, 2)
+    rv = p.add("tabread $0-fbv", x + 470, y + 390); p.con(t4, 1, rv, 0); p.con(rv, 0, co, 0)
+    z = p.msg("0", x + 400, y + 420); p.con(t4, 0, z, 0); p.con(z, 0, wd0, 0)
+    return q, (wv, wd)
 
 
 def write(path, title, rows):
