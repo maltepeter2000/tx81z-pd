@@ -26,7 +26,8 @@ build(rows) makes the layer abstraction [<name> <channel>] (channel 0 = all):
   with a controller that ignores the feedback. A change from the encoder is not echoed:
   the instrument reports it in the same logical time, which marks it as its own.
 The instrument needs: n <name> <0-127>, ninfo <name>, and "info <name> <0-127> <text>" on
-an outlet for every change (pdoly8~ does this).
+an outlet for every change (pdoly8~ does this). Other selectors: write(..., sel=("fm", "fminfo", "fm"))
+(set, ask, report), e.g. the FM view of tx81zn~.
 """
 import os
 import sys
@@ -62,12 +63,13 @@ def page_text(k):
     return " ".join(runs)
 
 
-def build(title, rows):
+def build(title, rows, sel=("n", "ninfo", "info")):
+    s_set, s_ask, s_info = sel
     import patchwriter as G                      # the patch writer P
     m = cc_map(rows)
     p = G.P(None, 900, 900)
     p.note(f"{title}: controller layer - CC pages 20-119 (without 32 38 64-69 84 88 96-101) on channel $1 "
-           "(0 = all) -> n <name> <0-127>. Inlet: info <name> <0-127> <text> from the instrument, "
+           f"(0 = all) -> {s_set} <name> <0-127>. Inlet: {s_info} <name> <0-127> <text> from the instrument, "
            "pickup 0/1, sync (also CC 3 from the controller), channel <n> (0 = all; the instrument reports its channel). Changes from elsewhere go back to the controller as CC (ctlout), "
            "pickup avoids jumps. Table: line = CC number, the setting or -.", 10, 6)
     # ---- init: two timers (logical time since load), arrays, channel
@@ -124,15 +126,15 @@ def build(title, rows):
         p.con(tc, 0, w, 1)
     p.con(tp, 0, sv, 0)
     lp = p.add("list prepend", 120, 790); p.con(sv, 0, lp, 0); p.con(tbl, 1, lp, 1)
-    lpn = p.add("list prepend n", 120, 820); p.con(lp, 0, lpn, 0)
+    lpn = p.add(f"list prepend {s_set}", 120, 820); p.con(lp, 0, lpn, 0)
     ltr2 = p.add("list trim", 120, 850); p.con(lpn, 0, ltr2, 0)
     out = p.add("outlet", 120, 880); p.con(ltr2, 0, out, 0)
     # ---- inlet: info <name> <0-127> <text> / pickup 0/1 / sync
     inl = p.add("inlet", 10, 940)
-    ri = p.add("route info pickup sync channel", 10, 970); p.con(inl, 0, ri, 0)
+    ri = p.add(f"route {s_info} pickup sync channel", 10, 970); p.con(inl, 0, ri, 0)
     p.con(ri, 3, ch, 0)   # channel <0-16> from the instrument: follow it (0 = all)
     p.con(ri, 1, pass_, 4)
-    allm = p.msg(", ".join(f"ninfo {n}" for n in m), 560, 1000)
+    allm = p.msg(", ".join(f"{s_ask} {n}" for n in m), 560, 1000)
     p.con(ri, 2, allm, 0); p.con(dl, 0, allm, 0); p.con(allm, 0, out, 0)
     s3 = p.add("sel 3", 300, 440); p.con(u2, 1, s3, 0); p.con(s3, 0, allm, 0)   # CC 3: sync request
     lst = p.add("list", 160, 1000); p.con(ri, 0, lst, 0)       # "har1 37 .." (selector har1) -> list
@@ -211,9 +213,9 @@ def feedback_queue(p, tb, chmax):
     return q, (wv, wd)
 
 
-def write(path, title, rows):
+def write(path, title, rows, sel=("n", "ninfo", "info")):
     import patchwriter as G
-    p, m = build(title, rows)
+    p, m = build(title, rows, sel)
     by = {cc: nm for nm, cc in m.items()}
     data = [by.get(k, "-") for k in range(128)]
     out = []

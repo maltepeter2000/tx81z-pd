@@ -17,7 +17,7 @@
 //   channel <0 omni | 1-16>, gain <f>, dumpreq (report every parameter again)
 //   tune <0-127>                            master tune (64 = centre)
 //   factoryinit                             all notes off, voice A01 (nothing is written)
-//   fm <control> <0-127>                    FM view (txfm.h): roles C / A / B from the algorithm
+//   fm <control> <0-127>, fminfo <control>  FM view (txfm.h): roles C / A / B from the algorithm
 // Program change: 0-31 internal I01-I32, 32-127 presets A01-C32 (the TX81Z's initial table).
 // Outlets: left / right audio, messages: info <name> <0-127> <text>, voice <name>, voicedata ...,
 //   fm <control> <0-127> <text>, channel <n>, status <text>, lcd <line1> <line2> (the splash screen, once on load)
@@ -407,6 +407,16 @@ static void txn_fm(t_txn *x, t_symbol *name, t_floatarg v)
 
 static void report_channel(t_txn *x);
 
+// fminfo <control>: report it now (controller layer txfmcc)
+static void txn_fminfo(t_txn *x, t_symbol *name)
+{
+	int i = txfm::fm_find(name->s_name);
+	if (i < 0 || !x->ready) return;
+	char text[32];
+	int c = fm_value(x, i, text, sizeof text);
+	emit_fm(x, i, c < 0 ? -1 - c : c, text);
+}
+
 static void txn_dumpreq(t_txn *x)
 {
 	for (int i = 0; i < NTXPARAMS; i++) x->reported[i] = -1;
@@ -659,6 +669,7 @@ void tx81zn_tilde_setup(void)
 	class_addmethod(txn_class, (t_method)txn_vced, gensym("vced"), A_FLOAT, A_FLOAT, A_NULL);
 	class_addmethod(txn_class, (t_method)txn_aced, gensym("aced"), A_FLOAT, A_FLOAT, A_NULL);
 	class_addmethod(txn_class, (t_method)txn_fm, gensym("fm"), A_SYMBOL, A_FLOAT, A_NULL);
+	class_addmethod(txn_class, (t_method)txn_fminfo, gensym("fminfo"), A_SYMBOL, A_NULL);
 	class_addmethod(txn_class, (t_method)txn_dumpreq, gensym("dumpreq"), A_NULL);
 	class_addmethod(txn_class, (t_method)txn_getvoice, gensym("getvoice"), A_NULL);
 	class_addmethod(txn_class, (t_method)txn_voicedata, gensym("voicedata"), A_GIMME, A_NULL);

@@ -36,6 +36,9 @@ PAD_TEXT = {"factory+": "next factory patch", "user+": "next user patch", "facto
 SAVE_EVERY_MS = 60000
 NATIVE = "--native" in sys.argv
 OBJ = "tx81zn~" if NATIVE else "tx81z~"
+CC_LAYER = "txfmcc" if NATIVE else "txcc"     # native: the pages of the FM editor txfm
+INFO = "fm" if NATIVE else "info"             # what the layer sends and the instrument reports
+SET = "fm" if NATIVE else "n"
 if NATIVE:   # nothing to save: tx81zn~ only reads the battery RAM
     PADS = [pd for pd in PADS if pd[1] != "save"]
 
@@ -52,7 +55,7 @@ def midi_sub():
     p = G.P("midi", 900, 520)
     p.note(f"MIDI from Bela -> {OBJ}. Channel {CTL_CH} is the control channel (pd control). "
            "CC 1-19 (not 3) and 64-69 go to the TX81Z (mod wheel, breath, foot, volume, sustain ...), "
-           "CC 20-119 are the controller layer [txcc].", 10, 10)
+           f"CC 20-119 are the controller layer [{CC_LAYER}].", 10, 10)
     # notes
     ni = p.add("notein", 10, 60)
     ch = fold(p, ni, 2, 90, 85)
@@ -201,7 +204,7 @@ def oled_sub():
            "TX81Z's voice line (C15 LatelyBass), a turned parameter shows out1 = 67, the control "
            "channel shows what it did (stored slot 5). At most every 50 ms.", 10, 10)
     ro = p.add("r tx-out", 10, 60)
-    rl = p.add("route lcd info voice status", 10, 90); p.con(ro, 0, rl, 0)
+    rl = p.add(f"route lcd {INFO} voice status", 10, 90); p.con(ro, 0, rl, 0)
     # LCD line 2 (the voice line in PLAY mode) kept for patch changes
     l1 = p.add("list", 10, 120); p.con(rl, 0, l1, 0)
     up = p.add("unpack s s", 10, 150); p.con(l1, 0, up, 0)
@@ -215,7 +218,7 @@ def oled_sub():
         dv = p.add("del 150", 300, 150); p.con(tv, 0, dv, 0); p.con(dv, 0, sy2, 0)
     # a parameter shows only when it was turned (n <name> ... on the bus), not from voice dumps
     rb = p.add("r tx", 600, 180)
-    rnn = p.add("route n", 600, 210); p.con(rb, 0, rnn, 0)
+    rnn = p.add(f"route {SET}", 600, 210); p.con(rb, 0, rnn, 0)
     lnn = p.add("list", 600, 240); p.con(rnn, 0, lnn, 0)
     unn = p.add("unpack s f", 600, 270); p.con(lnn, 0, unn, 0)
     li = p.add("list", 150, 180); p.con(rl, 1, li, 0)
@@ -272,7 +275,7 @@ def build():
     top = G.P(None, 900, 420)
     if NATIVE:
         top.note("TX81Z on Bela: tx81zn~ (native engine) - MIDI in, controller layer, OLED, "
-                 "control channel, OSC remote. Files: tx81zn~.pd_linux, txcc.pd, tx81z-v1.6.bin, "
+                 "control channel, OSC remote. Files: tx81zn~.pd_linux, txfmcc.pd, tx81z-v1.6.bin, "
                  "tx81z.nvram (optional, read only: bank I and MIDI channel), txuser-bank.txt.", 10, 10)
     else:
         top.note("TX81Z on Bela: tx81z~ (original firmware) - MIDI in, controller layer, OLED, "
@@ -283,9 +286,11 @@ def build():
     d = top.add("dac~ 1 2", 10, 150); top.con(t, 0, d, 0); top.con(t, 1, d, 1)
     so = top.add("s tx-out", 300, 150); top.con(t, 2, so, 0)
     ro = top.add("r tx-out", 10, 210)
-    cc = top.add("txcc 0", 10, 240); top.con(ro, 0, cc, 0)
+    cc = top.add(f"{CC_LAYER} 0", 10, 240); top.con(ro, 0, cc, 0)
     sc = top.add("s tx", 10, 270); top.con(cc, 0, sc, 0)
-    top.note("controller layer: CC pages 20-119, follows the TX81Z receive channel", 80, 240)
+    top.note("controller layer: CC pages 1-7 = the pages of the FM editor txfm (CC 20-83), follows the "
+             "receive channel" if NATIVE else
+             "controller layer: CC pages 20-119, follows the TX81Z receive channel", 80, 240)
     m, _ = midi_sub()
     top.sub(m, 10, 320)
     top.sub(control_sub(), 110, 320)

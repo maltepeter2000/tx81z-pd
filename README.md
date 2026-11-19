@@ -136,7 +136,11 @@ A control of a role changes all of its operators.
 | LFO | speed, wave, delay, pitch depth, amp depth, pitch sens, amp sens, key sync |
 | VOICE | poly / mono, bend range, porta mode, porta time, transpose, LFO amp on C / A / B |
 
-`tx81zn~` takes `fm <control> <0-127>` and reports `fm <control> <0-127> <text>` (the text is
+`[txfmcc <channel>]` is the controller layer for it: Launchkey pages 1-7 = the 7 rows of the
+editor (CC 20-83, page 7 VOICE: CC 80 = transpose), with feedback, pickup and sync like `txcc`.
+In a patch: `[r tx1-out]` -> `[txfmcc 0]` -> `[s tx1]`.
+
+`tx81zn~` takes `fm <control> <0-127>` and `fminfo <control>` and reports `fm <control> <0-127> <text>` (the text is
 `-` when the role has no operator in this algorithm). The controls are defined in
 `pd/txfm.h`; `tools/gen_fmedit.py` generates `pd/txfm.pd` from it. `[txedit <bus>]` works on the
 same bus for every single parameter.

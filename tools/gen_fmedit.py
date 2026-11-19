@@ -56,6 +56,8 @@ def macros():
 
 
 MACROS, PAGES = macros()
+import ctlayer                                   # noqa: E402
+CCTEXT = [ctlayer.page_text(k) for k in range(len(PAGES))]
 assert len(MACROS) == len({m[0] for m in MACROS}) == 8 * len(PAGES)
 
 CW, ROWH, X0 = 84, 80, 10
@@ -123,7 +125,7 @@ def gui(c):
     top_band(c)
     for p, title in enumerate(PAGES):
         y = TOP + p * ROWH
-        c.add(f"#X obj {X0 - 4} {y} cnv 15 {8 * CW} {ROWH - 6} empty empty {title.replace(' ', SP)} 4 8 0 10 "
+        c.add(f"#X obj {X0 - 4} {y} cnv 15 {8 * CW} {ROWH - 6} empty empty {(title + '  CC ' + CCTEXT[p]).replace(' ', SP)} 4 8 0 10 "
               f"{BAND[p % 2]} #404040 0;")
         for k, (nm, lbl, _) in enumerate(m for m in MACROS if m[2] == p):
             x, yc = X0 + k * CW, y + 18
@@ -208,7 +210,17 @@ def build():
     return "\n".join([f"#N canvas 20 20 {8 * CW + 30} {h} 10;"] + c.lines + sub + c.conns) + "\n"
 
 
+def write_cc(path):
+    """[txfmcc <channel>]: the controller layer for the FM view, page k = row k of the editor"""
+    import ctlayer
+    rows = [(t, [m[0] for m in MACROS if m[2] == k]) for k, t in enumerate(PAGES)]
+    return ctlayer.write(path, "txfmcc (tx81zn~ FM view)", rows, sel=("fm", "fminfo", "fm"))
+
+
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(ROOT, "pd", "txfm.pd")
     open(out, "w").write(build())
     print("wrote", out, f"({len(MACROS)} controls on {len(PAGES)} pages)")
+    cc = os.path.join(os.path.dirname(out), "txfmcc.pd")
+    m = write_cc(cc)
+    print("wrote", cc, f"({len(m)} controls on CC)")

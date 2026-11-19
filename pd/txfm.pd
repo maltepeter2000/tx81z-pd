@@ -28,7 +28,7 @@
 #X obj 394 94 bng 17 250 50 0 \$0-rnd-brass empty brass 21 9 0 10 #fcfcfc #000000 #000000;
 #X obj 494 94 bng 17 250 50 0 \$0-rnd-pad empty pad 21 9 0 10 #fcfcfc #000000 #000000;
 #X obj 594 94 bng 17 250 50 0 \$0-rnd-strings empty strings 21 9 0 10 #fcfcfc #000000 #000000;
-#X obj 6 124 cnv 15 672 74 empty empty SYN\ 1 4 8 0 10 #e8eef6 #404040 0;
+#X obj 6 124 cnv 15 672 74 empty empty SYN\ 1\ \ CC\ 20-27 4 8 0 10 #e8eef6 #404040 0;
 #X text 10 142 algorithm;
 #X obj 10 160 hsl 74 12 0 127 0 0 \$0-e-algo \$0-v-algo empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 10 176 3 0 127 0 - \$0-v-algo \$0-e-algo;
@@ -61,7 +61,7 @@
 #X obj 598 160 hsl 74 12 0 127 0 0 \$0-e-mix \$0-v-mix empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 598 176 3 0 127 0 - \$0-v-mix \$0-e-mix;
 #X symbolatom 624 176 8 0 0 0 - \$0-t-mix -;
-#X obj 6 204 cnv 15 672 74 empty empty SYN\ 2 4 8 0 10 #dde5f0 #404040 0;
+#X obj 6 204 cnv 15 672 74 empty empty SYN\ 2\ \ CC\ 28-31\ 33-36 4 8 0 10 #dde5f0 #404040 0;
 #X text 10 222 wave C;
 #X obj 10 240 hsl 74 12 0 127 0 0 \$0-e-wavc \$0-v-wavc empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 10 256 3 0 127 0 - \$0-v-wavc \$0-e-wavc;
@@ -94,7 +94,7 @@
 #X obj 598 240 hsl 74 12 0 127 0 0 \$0-e-lvlc \$0-v-lvlc empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 598 256 3 0 127 0 - \$0-v-lvlc \$0-e-lvlc;
 #X symbolatom 624 256 8 0 0 0 - \$0-t-lvlc -;
-#X obj 6 284 cnv 15 672 74 empty empty ENV\ C 4 8 0 10 #e8eef6 #404040 0;
+#X obj 6 284 cnv 15 672 74 empty empty ENV\ C\ \ CC\ 37\ 39-45 4 8 0 10 #e8eef6 #404040 0;
 #X text 10 302 attack;
 #X obj 10 320 hsl 74 12 0 127 0 0 \$0-e-atkc \$0-v-atkc empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 10 336 3 0 127 0 - \$0-v-atkc \$0-e-atkc;
@@ -127,7 +127,7 @@
 #X obj 598 320 hsl 74 12 0 127 0 0 \$0-e-rscc \$0-v-rscc empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 598 336 3 0 127 0 - \$0-v-rscc \$0-e-rscc;
 #X symbolatom 624 336 8 0 0 0 - \$0-t-rscc -;
-#X obj 6 364 cnv 15 672 74 empty empty ENV\ A 4 8 0 10 #dde5f0 #404040 0;
+#X obj 6 364 cnv 15 672 74 empty empty ENV\ A\ \ CC\ 46-53 4 8 0 10 #dde5f0 #404040 0;
 #X text 10 382 attack;
 #X obj 10 400 hsl 74 12 0 127 0 0 \$0-e-atka \$0-v-atka empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 10 416 3 0 127 0 - \$0-v-atka \$0-e-atka;
@@ -160,7 +160,7 @@
 #X obj 598 400 hsl 74 12 0 127 0 0 \$0-e-rsca \$0-v-rsca empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 598 416 3 0 127 0 - \$0-v-rsca \$0-e-rsca;
 #X symbolatom 624 416 8 0 0 0 - \$0-t-rsca -;
-#X obj 6 444 cnv 15 672 74 empty empty ENV\ B 4 8 0 10 #e8eef6 #404040 0;
+#X obj 6 444 cnv 15 672 74 empty empty ENV\ B\ \ CC\ 54-61 4 8 0 10 #e8eef6 #404040 0;
 #X text 10 462 attack;
 #X obj 10 480 hsl 74 12 0 127 0 0 \$0-e-atkb \$0-v-atkb empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 10 496 3 0 127 0 - \$0-v-atkb \$0-e-atkb;
@@ -193,7 +193,7 @@
 #X obj 598 480 hsl 74 12 0 127 0 0 \$0-e-rscb \$0-v-rscb empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 598 496 3 0 127 0 - \$0-v-rscb \$0-e-rscb;
 #X symbolatom 624 496 8 0 0 0 - \$0-t-rscb -;
-#X obj 6 524 cnv 15 672 74 empty empty LFO 4 8 0 10 #dde5f0 #404040 0;
+#X obj 6 524 cnv 15 672 74 empty empty LFO\ \ CC\ 62-63\ 70-75 4 8 0 10 #dde5f0 #404040 0;
 #X text 10 542 speed;
 #X obj 10 560 hsl 74 12 0 127 0 0 \$0-e-lspd \$0-v-lspd empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 10 576 3 0 127 0 - \$0-v-lspd \$0-e-lspd;
@@ -226,7 +226,7 @@
 #X obj 598 560 hsl 74 12 0 127 0 0 \$0-e-lsyn \$0-v-lsyn empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 598 576 3 0 127 0 - \$0-v-lsyn \$0-e-lsyn;
 #X symbolatom 624 576 8 0 0 0 - \$0-t-lsyn -;
-#X obj 6 604 cnv 15 672 74 empty empty VOICE 4 8 0 10 #e8eef6 #404040 0;
+#X obj 6 604 cnv 15 672 74 empty empty VOICE\ \ CC\ 76-83 4 8 0 10 #e8eef6 #404040 0;
 #X text 10 622 poly/mono;
 #X obj 10 640 hsl 74 12 0 127 0 0 \$0-e-poly \$0-v-poly empty -2 -8 0 10 #fcfcfc #000000 #000000 0 1;
 #X floatatom 10 656 3 0 127 0 - \$0-v-poly \$0-e-poly;
