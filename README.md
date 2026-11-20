@@ -172,6 +172,7 @@ same bus for every single parameter.
 | `pd/txcc.pd`, `pd/txedit.pd`, `pd/tx81z_params.h` | controller layer, editor, parameter table (generated) |
 | `tools/tx81z_params.py` | the parameter table (source for the external, txcc, txedit and the help) |
 | `tools/gen_txcc.py`, `tools/gen_editor.py`, `tools/gen_help.py` | generators for `txcc.pd`, `txedit.pd`, `tx81z~-help.pd` |
+| `tools/gen_fmedit.py`, `tools/gen_help_native.py` | generators for `txfm.pd`, `txfmcc.pd`, `tx81zn~-help.pd` |
 | `tests/make_test_rom.py` | self-written 6303 test ROM (no Yamaha code) |
 | `tools/opz_log.lua`, `tools/opz_decode.py` | MAME logger and decoder for comparisons |
 | `tools/set_message.py` | changes the power-on message in a battery RAM file |
